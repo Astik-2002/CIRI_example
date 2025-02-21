@@ -1,0 +1,43 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/obstaclefree.dir/src/ObstacleFree.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/ObstacleFree.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/ciri.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/ciri.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/corridor_finder.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/corridor_finder.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/kdtree.c.o"
+  "CMakeFiles/obstaclefree.dir/src/kdtree.c.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/banded_system.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/banded_system.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/ellipsoid.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/ellipsoid.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/geometry_utils.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/geometry_utils.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/lbfgs.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/lbfgs.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/mvie.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/mvie.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/optimization_utils.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/optimization_utils.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/piece.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/piece.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/polynomial_interpolation.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/polynomial_interpolation.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/polytope.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/polytope.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/quickhull.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/quickhull.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/root_finder.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/root_finder.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/sdlp.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/sdlp.cpp.o.d"
+  "CMakeFiles/obstaclefree.dir/src/utils/trajectory.cpp.o"
+  "CMakeFiles/obstaclefree.dir/src/utils/trajectory.cpp.o.d"
+  "obstaclefree"
+  "obstaclefree.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C CXX)
+  include(CMakeFiles/obstaclefree.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

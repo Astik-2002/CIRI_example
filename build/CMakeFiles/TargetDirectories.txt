@@ -1,0 +1,3 @@
+/home/astik/CIRI_eg/build/CMakeFiles/obstaclefree.dir
+/home/astik/CIRI_eg/build/CMakeFiles/edit_cache.dir
+/home/astik/CIRI_eg/build/CMakeFiles/rebuild_cache.dir
