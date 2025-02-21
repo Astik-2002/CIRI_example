@@ -454,7 +454,7 @@ void ObstacleFree::convexCoverCIRI(const Eigen::MatrixXd &path,
 
         Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
 
-        if (ciri.convexDecomposition(bd, pc, a, b, o, tangent_obs, uncertanity) != super_utils::SUCCESS) 
+        if (ciri.comvexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) 
         {
             std::cerr << "CIRI decomposition failed." << std::endl;
             continue;
@@ -1065,7 +1065,7 @@ int main(int argc, char** argv)
         seed_pt_cloud->points.push_back(a_pt);
         seed_pt_cloud->points.push_back(b_pt);
         
-        int num_points = 5;
+        int num_points = 50;
         for(int i=0; i<num_points; i++)
         {
             double x = dis_x(gen);
@@ -1099,18 +1099,18 @@ int main(int argc, char** argv)
         std::vector<geometry_utils::Ellipsoid> tangent_obs;
         std::vector<geometry_utils::Ellipsoid> tangent_obs2;
         
-        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys, o, tangent_obs, true);
-        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys2, o, tangent_obs2, false);
+        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 15.0, _uav_size, CIRI_hpolys, o, tangent_obs, true);
+        // sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys2, o, tangent_obs2, false);
 
         std::cout<<"CIRI_hpolys[0]: "<<CIRI_hpolys[0]<<std::endl;
         
         pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Polytope Visualization"));
         int id = 0;
         sfc_generator.visualizeCIRI(CIRI_hpolys, viewer, id);
-        sfc_generator.visualizeCIRI(CIRI_hpolys2, viewer, ++id);
+        // sfc_generator.visualizeCIRI(CIRI_hpolys2, viewer, ++id);
         id = 0;
-        sfc_generator.visualizeObs(tangent_obs, viewer, id);
-        sfc_generator.visualizeObs(tangent_obs2, viewer, ++id);
+        // sfc_generator.visualizeObs(tangent_obs, viewer, id);
+        // sfc_generator.visualizeObs(tangent_obs2, viewer, ++id);
         viewer->addPointCloud(demo_input_cloud, "input_pcd");
         viewer->addPointCloud(seed_pt_cloud, "seed_pcd");
 

@@ -33,42 +33,9 @@ namespace super_planner {
 
     CIRI::~CIRI() {
     }
-    constexpr double PI = 3.141592653589793;
-    constexpr double k_lateral = 0.5;  // Empirical factor for lateral noise
 
-    // Function to compute theta_y (angle of incidence)
-    double CIRI::computeThetaY(const Eigen::Vector3d& point) {
-        return std::atan2(std::sqrt(point.x() * point.x() + point.y() * point.y()), point.z());
-    }
-
-    // Function to compute standard deviations for each point in the point cloud
-    Eigen::Vector3d CIRI::computeNoiseStd(const Eigen::Vector3d& point) {
-        double x = point.x();  // Depth
-
-        // Compute axial noise (σz) using the formula from the paper
-        double sigma_x = std::min((0.001063 + 0.0007278 * x + 0.003949 * x * x)*sqrt(11.33), 0.6) + robot_r_;
-
-        // Compute lateral noise (σx, σy)
-        double sigma_z = 0.04*sqrt(11.33) + robot_r_;
-        double sigma_y = 0.04*sqrt(11.33) + robot_r_;
-
-        return Eigen::Vector3d(sigma_x, sigma_y, sigma_z);
-    }
-
-    // Function to compute standard deviations for an entire point cloud
-    Eigen::Matrix3Xd CIRI::computePointCloudNoise(const Eigen::Matrix3Xd& pointCloud, const Eigen::Vector3d &o) {
-        int numPoints = pointCloud.cols();  // Number of points
-        Eigen::Matrix3Xd noiseValues(3, numPoints);  // Output noise matrix (σx, σy, σz)
-    
-        for (int i = 0; i < numPoints; ++i) {
-            noiseValues.col(i) = computeNoiseStd(pointCloud.col(i) - o);
-        }
-    
-        return noiseValues;
-    }    
-
-    RET_CODE CIRI::convexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
-                                       const Eigen::Vector3d& b, const Eigen::Vector3d &o, std::vector<Ellipsoid> &tangent_obs, bool uncertanity) {
+    RET_CODE CIRI::comvexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
+                                       const Eigen::Vector3d& b) {
         const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
         const Eigen::Vector4d bh(b(0), b(1), b(2), 1.0);
 
@@ -97,19 +64,8 @@ namespace super_planner {
 
 //        bool infeasible_problem{false};
         Vec3f infeasible_pt_w;
-        
-        auto noise_pc = computePointCloudNoise(pc, o);
-        std::vector<Ellipsoid> E_pw_vec;
-        for(int i = 0; i<N; i++)
-        {
-            Vec3f noise_vec = noise_pc.col(i);
-            Vec3f point_vec = pc.col(i);
-            auto temp = Ellipsoid(Mat3f::Identity(), noise_vec, point_vec);
-            E_pw_vec.push_back(temp);
-        }
-        int debug_l;
+
         for (int loop = 0; loop < iter_num_; ++loop) {
-            debug_l = loop;
             // Initialize the boundary in ellipsoid frame
             const Eigen::Vector3d fwd_a = E.toEllipsoidFrame(a);
             const Eigen::Vector3d fwd_b = E.toEllipsoidFrame(b);
@@ -135,8 +91,7 @@ namespace super_planner {
             Vec3f tmp_nn_pt;
             Vec4f plan_before_ab;
 
-            for (int i = 0; !completed && i < (M + N); ++i) 
-            {
+            for (int i = 0; !completed && i < (M + N); ++i) {
                 if (minSqrD < minSqrR) {
                     /// Case [Bd closer than ob]  enable the boundary constrain.
                     Vec4f p_e = bd_e.row(bdMinId);
@@ -149,25 +104,18 @@ namespace super_planner {
                     ///
                     const auto & pt_w = pc.col(pcMinId);
                     const auto dis = distancePointToSegment(pt_w,a,b);
-                    double uncertain_radius = 0;
-                    // if(uncertanity)
-                    // {
-                    //     auto noise_pt_w = noise_pc.col(pcMinId);
-                    //     uncertain_radius = noise_pt_w.maxCoeff()*sqrt(11.3345);
-                    //     robot_r_ = robot_r_ + uncertain_radius;
-                    // }
                     if(dis < robot_r_ - 1e-2) {
-                        // infeasible_problem = true;
+//                        infeasible_problem = true;
                         infeasible_pt_w = pt_w;
                         cout<<YELLOW<<" -- [CIRI] WARNING! The problem is not feasible, the min dis to obstacle is only: "<<dis<<RESET<<endl;
                         return FAILED;
                         cout<<" -- [CIRI] dis: "<<dis<<endl;
                         cout<<" -- [CIRI] robot_r: "<<robot_r_<<endl;
-                        cout<<" -- [CIRI] uncertanity added: "<<uncertain_radius<<endl;
                         cout<<" -- [CIRI] pcMin: "<<pt_w.transpose()<<endl;
                         cout<<" -- [CIRI] a: "<<a.transpose()<<endl;
                         cout<<" -- [CIRI] b: "<<b.transpose()<<endl;
                     }
+
                     if (robot_r_ < epsilon_) {
                         const Vec3f& pt_e = pc_e.col(pcMinId);
                         temp_tangent(3) = -distRs(pcMinId);
@@ -200,61 +148,20 @@ namespace super_planner {
                         /// Case [Ob closer than Bd] enable the obstacle point constarin.
                         const Vec3f &pt_e = pc_e.col(pcMinId);
                         const Vec3f &pt_w = pc.col(pcMinId);
-                        Ellipsoid E_pw;
-                        auto noise_pt_w = noise_pc.col(pcMinId);
-                        if(uncertanity)
-                        {
-                            sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w, Vec3f(0, 0, 0));
-                            Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
-                            Vec3f close_pt_e;
-                            E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
-                            Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
-                            E_pw = E_pw_vec[pcMinId];
-                            temp_plane_w = E_pw.computeTangentPlane(c_pt_w);   
-                            tangent_obs.push_back(E_pw);
-                        }
-                        else
-                        {
-                            sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w.maxCoeff()*Vec3f(1, 1, 1), Vec3f(0, 0, 0));
-                            Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
-                            Vec3f close_pt_e;
-                            E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
-                            Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
-                            temp_plane_w.head(3) = (pt_w - c_pt_w).normalized();
-                            temp_plane_w(3) = -temp_plane_w.head(3).dot(c_pt_w);
-                            E_pw = Ellipsoid(Mat3f::Identity(), noise_pt_w.maxCoeff()*Vec3f(1, 1, 1), pt_w);
-                            tangent_obs.push_back(E_pw);
-                        }
-
-                        // std::cout<<" plane generated normally: "<<temp_plane_w.transpose()<<std::endl;
-                        // std::cout<<" plane generated new formula: "<<temp_plane_comp.transpose()<<std::endl;
-                        // std::cout<<" obstacle inverse matrix: "<<E_pw.C_inv().transpose()<<std::endl;
-                        // std::cout<<" obstacle r matrix: "<<E_pw.r().transpose()<<std::endl;
+                        Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
+                        Vec3f close_pt_e;
+                        E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
+                        Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
+                        temp_plane_w.head(3) = (pt_w - c_pt_w).normalized();
+                        temp_plane_w(3) = -temp_plane_w.head(3).dot(c_pt_w);
 
                         /// Cut line with sphere A and B,
                         if (temp_plane_w.head(3).dot(a) + temp_plane_w(3) > -epsilon_) {
-                            std::cout<<"case A"<<std::endl;
                             // Case the plan make seed out, the plane should be modified in world frame
-                            if(uncertanity)
-                            {
-                                std::cout<<" obstacle center: "<<E_pw.d()<<std::endl;
-                                findTangentPlaneOfEllipsoid(E_pw, a, E.d(), temp_plane_w);
-                            }
-                            else
-                            {
-                                findTangentPlaneOfSphere(pt_w, noise_pt_w.maxCoeff(), a, E.d(), temp_plane_w);
-                            }
+                            findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w);
                         } else if (temp_plane_w.head(3).dot(b) + temp_plane_w(3) > -epsilon_) {
-                            std::cout<<"case B"<<std::endl;
                             // Case the plan make seed out, the plane should be modified in world frame
-                            if(uncertanity)
-                            {
-                                findTangentPlaneOfEllipsoid(E_pw, b, E.d(), temp_plane_w);
-                            }
-                            else
-                            {
-                                findTangentPlaneOfSphere(pt_w, noise_pt_w.maxCoeff(), b, E.d(), temp_plane_w);
-                            }
+                            findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w);
                         }
                     }
                     pcFlags(pcMinId) = 0;
@@ -274,35 +181,15 @@ namespace super_planner {
                 }
                 minSqrR = INFINITY;
                 for (int j = 0; j < N; ++j) {
-                    if (pcFlags(j)) 
-                    {
-                        if(uncertanity)
-                        {
-                            auto temp_plane_e = E_pw_vec[j].toEllipsoidFrame(temp_plane_w);
-                            Eigen::Vector3d o{0.0, 0.0, 0.0};
-                            if(temp_plane_e.head(3).dot(o) + temp_plane_e(3) > 1 - epsilon_) {
-                                pcFlags(j) = 0;
-                            }
-                            else 
-                            {
-                                completed = false;
-                                if (minSqrR > distRs(j)) {
-                                    pcMinId = j;
-                                    minSqrR = distRs(j);
-                                }
-                            }
+                    if (pcFlags(j)) {
+                        if ((temp_plane_w.head(3).dot(pc.col(j)) + temp_plane_w(3)) > robot_r_ - epsilon_) {
+                            pcFlags(j) = 0;
                         }
-                        else
-                        {
-                            if ((temp_plane_w.head(3).dot(pc.col(j)) + temp_plane_w(3)) > noise_pc.col(j).maxCoeff() - epsilon_) {
-                                pcFlags(j) = 0;
-                            }
-                            else {
-                                completed = false;
-                                if (minSqrR > distRs(j)) {
-                                    pcMinId = j;
-                                    minSqrR = distRs(j);
-                                }
+                        else {
+                            completed = false;
+                            if (minSqrR > distRs(j)) {
+                                pcMinId = j;
+                                minSqrR = distRs(j);
                             }
                         }
                     }
@@ -321,6 +208,16 @@ namespace super_planner {
 
             if(hPoly.array().isNaN().any()) {
                 cout << YELLOW << " -- [CIRI] ERROR! maxVolInsEllipsoid failed." << RESET << endl;
+//                optimized_polytope_.Reset();
+//                optimized_polytope_.SetPlanes(hPoly);
+//                optimized_polytope_.SetSeedLine(std::make_pair(a, b));
+//                optimized_polytope_.SetEllipsoid(E);
+//                ros_ptr_->vizCiriSeedLine(a, b,robot_r_);
+//                cout<<" -- [CIRI] infeasible_pt_w: "<<infeasible_pt_w.transpose()<<endl;
+//                ros_ptr_->vizCiriInfeasiblePoint(infeasible_pt_w);
+//                ros_ptr_->vizCiriEllipsoid(E);
+////                optimized_polytope_.Visualize(debug_pub_, "optimized_polytope");
+//                std::cout << " -- [CIRI] hPoly: " << hPoly << std::endl;
                 return FAILED;
             }
 
@@ -328,16 +225,20 @@ namespace super_planner {
                 return FAILED;
             }
         }
-        std::cout<<"number of iterations: "<<debug_l<<std::endl;
+
         if (std::isnan(hPoly.sum())) {
             cout << YELLOW << " -- [CIRI] ERROR! There is nan in generated planes." << RESET << endl;
             cout << a.transpose() << endl;
             cout << b.transpose() << endl;
+            // ros_ptr_->vizCiriSeedLine(a, b,robot_r_);
+            // ros_ptr_->vizCiriEllipsoid(E);
             return FAILED;
         }
         Vec3f inner;
         if (!geometry_utils::findInterior(hPoly, inner)) {
-            cout<<RED<<" -- [CIRI] The polytope is empty."<<RESET<<endl; 
+            cout<<RED<<" -- [CIRI] The polytope is empty."<<RESET<<endl;
+            // ros_ptr_->vizCiriSeedLine(a, b,robot_r_);
+            // ros_ptr_->vizCiriEllipsoid(E);
             return FAILED;
         }
         optimized_polytope_.Reset();
@@ -363,10 +264,36 @@ namespace super_planner {
     void CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
                                         const Eigen::Vector3d& pass_point,
                                         const Eigen::Vector3d& seed_p,
-                                        Eigen::Vector4d& outter_plane) 
-    {
+                                        Eigen::Vector4d& outter_plane) {
+
+        // v2
+        // const Vec3f v1 = (pass_point - seed_p);
+        // const Vec3f v2 = (center - seed_p);
+        // const Vec3f v3 = (center - pass_point);
+        // const double d1 = v1.norm();
+        // const double d2 = v2.norm();
+        // const double d3 = v3.norm();
+        //
+        // if(d3 < r || d1 < 1e-2 || d2< 1e-2) {
+        //     cout<<YELLOW<<" -- [CIRI] findTangentPlaneOfSphere: The pass point is inside the sphere."<<RESET<<endl;
+        //     return;
+        // }
+        //
+        // const double theta = asin(r / d3);
+        // const Vec3f axis = v1.cross(v2);
+        // const double d = sqrt(d3 * d3 - r * r);
+        // Eigen::AngleAxis<decimal_t> rot(theta, axis.normalized());
+        // Vec3f new_tangent_p = (rot * v3).normalized() * d + pass_point;
+        // Vec3f new_tangent_n = (new_tangent_p - center).normalized();
+        // // rebuild the tangent plan form pass point and tangent_normal
+        // outter_plane.head(3) = new_tangent_n;
+        // outter_plane(3) = -new_tangent_n.dot(new_tangent_p);
+        // if (outter_plane.head(3).dot(seed_p) + outter_plane(3) > epsilon_) {
+        //     outter_plane = -outter_plane;
+        // }
+
         Vec3f seed = seed_p;
-        Vec3f dif = pass_point - seed_p;
+        Vec3f dif = pass_point - pass_point;
         if (dif.norm() < 1e-3) {
             if ((pass_point - center).head(2).norm() > 1e-3) {
                 Vec3f v1 = (pass_point - center).normalized();
@@ -408,23 +335,6 @@ namespace super_planner {
         if (outter_plane.head(3).dot(seed) + outter_plane(3) > epsilon_) {
             outter_plane = -outter_plane;
         }
-    }
-
-    void CIRI::findTangentPlaneOfEllipsoid(const Ellipsoid obstacle, 
-                                        const Eigen::Vector3d& pass_point,
-                                        const Eigen::Vector3d& seed_p,
-                                        Eigen::Vector4d& outer_plane)
-    {
-        std::cout<<"[ciri debug] plane originally: "<<outer_plane<<std::endl;
-
-        auto pass_pt_ellip_frame = obstacle.toEllipsoidFrame(pass_point);
-        auto seed_pt_ellip_frame = obstacle.toEllipsoidFrame(seed_p);
-        Eigen::Vector3d ob_center_ellip_frame{0.0, 0.0, 0.0};
-        findTangentPlaneOfSphere(ob_center_ellip_frame, 1.0, pass_pt_ellip_frame, seed_pt_ellip_frame, outer_plane);
-        std::cout<<"[ciri debug] plane before transformation: "<<outer_plane<<std::endl;
-        outer_plane = obstacle.toWorldFrame(outer_plane);
-        std::cout<<"[ciri debug] plane after transformation: "<<outer_plane<<std::endl;
-
     }
 
     void CIRI::findEllipsoid(const Eigen::Matrix3Xd& pc,
@@ -510,33 +420,5 @@ namespace super_planner {
         }
         E = Ellipsoid(Rf, r, center);
         out_ell = E;
-    }
-
-    double CIRI::checkTangency(const Ellipsoid& E, const Eigen::Vector4d& plane) {
-        // Extract plane normal and offset.
-        Eigen::Vector3d n = plane.head(3);
-        double d = plane(3);
-        
-        // Make sure n is normalized.
-        n.normalize();
-    
-        // Get ellipsoid center, rotation, and radii.
-        // (Assuming E.d() returns center, E.R() returns rotation matrix,
-        // and E.r() returns a vector of radii.)
-        Eigen::Vector3d center = E.d();
-        Eigen::Matrix3d R = E.R();
-        Eigen::Vector3d radii = E.r();
-    
-        // Compute the absolute distance from the center to the plane.
-        double centerDistance = std::abs(n.dot(center) + d);
-    
-        // Compute the support function value in the direction n.
-        // That is, h(n) = sqrt( n^T (R * diag(radii^2) * R^T) n ).
-        Eigen::Vector3d n_in_rot = R.transpose() * n; // Transform n into ellipsoid's axis frame.
-        double support = std::sqrt((n_in_rot.array().square() * radii.array().square()).sum());
-    
-        // Use a small tolerance for floating-point comparisons.
-        constexpr double tol = 1e-5;
-        return centerDistance - support;
     }
 }

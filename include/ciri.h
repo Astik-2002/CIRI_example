@@ -57,6 +57,7 @@
 #include "../utils/optimization/mvie.h"
 #include "../utils/header/type_utils.hpp"
 
+
 namespace super_planner {
     using super_utils::RET_CODE;
     using geometry_utils::Ellipsoid;
@@ -92,15 +93,6 @@ namespace super_planner {
                                              const Eigen::Vector3d &pass_point,
                                              const Eigen::Vector3d &seed_p,
                                              Eigen::Vector4d &outter_plane);
-        
-        
-        static void findTangentPlaneOfEllipsoid(const Ellipsoid obstacle, 
-                                             const Eigen::Vector3d& pass_point,
-                                             const Eigen::Vector3d& seed_p,
-                                             Eigen::Vector4d& outer_plane);
-            
-        
-        double checkTangency(const Ellipsoid& E, const Eigen::Vector4d& plane);
 
         static double distancePointToSegment(const Eigen::Vector3d& P, const Eigen::Vector3d& A, const Eigen::Vector3d& B) {
             // 计算向量 AB 和 AP
@@ -141,19 +133,11 @@ namespace super_planner {
 
         void setupParams(double robot_r, int iter_num);
 
-        RET_CODE convexDecomposition(const Eigen::MatrixX4d &bd,
+        RET_CODE comvexDecomposition(const Eigen::MatrixX4d &bd,
                                      const Eigen::Matrix3Xd &pc,
                                      const Eigen::Vector3d &a,
-                                     const Eigen::Vector3d &b,
-                                     const Eigen::Vector3d &o,
-                                     std::vector<Ellipsoid> &tangent_obs,
-                                     bool uncertanity);
+                                     const Eigen::Vector3d &b);
 
         void getPolytope(Polytope &optimized_poly);
-        double computeThetaY(const Eigen::Vector3d& point);
-        Eigen::Vector3d computeNoiseStd(const Eigen::Vector3d& point);
-        Eigen::Matrix3Xd computePointCloudNoise(const Eigen::Matrix3Xd& pointCloud, const Eigen::Vector3d &o);
-        double planeIntersectsEllipsoid(const Ellipsoid &ellip, const Eigen::Vector4d &plane);
-
     };
 }
