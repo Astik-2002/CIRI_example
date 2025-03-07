@@ -55,6 +55,41 @@ namespace super_planner {
         return Eigen::Vector3d(sigma_x, sigma_y, sigma_z);
     }
 
+    Mat3f CIRI::computeCovariance(const Eigen::Vector3d& point)
+    {
+        super_utils::Mat3f R_tf;
+        R_tf << 0, 0, 1,
+        1, 0, 0,
+        0, 1, 0;
+
+        super_utils::Mat3f R_tf_inv = R_tf.inverse();
+        Eigen::Vector3d point_cam = R_tf_inv * point;
+        double x = point_cam[0], y = point_cam[1], z = point_cam[2];
+        double k1 = (0.04*sqrt(11.35) + robot_r_), k2 = k1;
+        double sz = ((0.001063 + 0.0007278 * z + 0.003949 * z * z)*sqrt(11.35) + robot_r_);
+        double k12 = k1*k1, k22 = k12;
+        super_utils::Mat3f Sigma;
+        Sigma << k12 + pow(x*sz/z,2), x*y*pow(sz/z,2), x/z*pow(sz,2),
+        x*y*pow(sz/z,2), k22 + pow(y*sz/z,2), y/z*pow(sz,2),
+        x/z*pow(sz,2), y/z*pow(sz,2), pow(sz,2) ;
+
+        Sigma = R_tf * Sigma * R_tf.transpose();
+        return Sigma;
+    }
+
+    Mat3f CIRI::computeRotation(const Eigen::Vector3d& point, const Eigen::Vector3d &o)
+    {
+        auto ray = point;
+        Eigen::Vector3d direction = ray.normalized();
+
+        // Create a rotation matrix that aligns the ellipsoid's principal axis with the direction vector
+        Eigen::Vector3d x_axis(1, 0, 0); // Assuming the ellipsoid's principal axis is initially aligned with the z-axis
+        Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(x_axis, direction);
+        Mat3f R_r = q.toRotationMatrix();
+    
+        return R_r;    
+    }
+
     // Function to compute standard deviations for an entire point cloud
     Eigen::Matrix3Xd CIRI::computePointCloudNoise(const Eigen::Matrix3Xd& pointCloud, const Eigen::Vector3d &o) {
         int numPoints = pointCloud.cols();  // Number of points
@@ -104,7 +139,10 @@ namespace super_planner {
         {
             Vec3f noise_vec = noise_pc.col(i);
             Vec3f point_vec = pc.col(i);
-            auto temp = Ellipsoid(Mat3f::Identity(), noise_vec, point_vec);
+            Mat3f cov = computeCovariance(point_vec);
+            auto temp = Ellipsoid(cov, point_vec);
+            // Mat3f rot = computeRotation(point_vec, o);
+            // auto temp = Ellipsoid(rot, noise_vec, point_vec);
             E_pw_vec.push_back(temp);
         }
         int debug_l;
@@ -204,12 +242,12 @@ namespace super_planner {
                         auto noise_pt_w = noise_pc.col(pcMinId);
                         if(uncertanity)
                         {
-                            sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w, Vec3f(0, 0, 0));
-                            Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
+                            // sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w, Vec3f(0, 0, 0));
+                            E_pw = E_pw_vec[pcMinId];
+                            Ellipsoid E_pe(C_inv * E_pw.C(), pt_e);
                             Vec3f close_pt_e;
                             E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
                             Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
-                            E_pw = E_pw_vec[pcMinId];
                             temp_plane_w = E_pw.computeTangentPlane(c_pt_w);   
                             tangent_obs.push_back(E_pw);
                         }
@@ -430,7 +468,8 @@ namespace super_planner {
     void CIRI::findEllipsoid(const Eigen::Matrix3Xd& pc,
                              const Eigen::Vector3d& a,
                              const Eigen::Vector3d& b,
-                             Ellipsoid& out_ell) {
+                             Ellipsoid& out_ell) 
+    {
         double f = (a - b).norm() / 2;
         Mat3f C = f * Mat3f::Identity();
         Vec3f r = Vec3f::Constant(f);

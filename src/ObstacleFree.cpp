@@ -414,7 +414,7 @@ void ObstacleFree::convexCoverCIRI(const Eigen::MatrixXd &path,
     std::vector<Eigen::Vector3d> valid_pc;
     valid_pc.reserve(points.size());
     super_planner::CIRI ciri;
-    ciri.setupParams(uav_size, 4); // Setup CIRI with robot radius and iteration number
+    ciri.setupParams(uav_size, 1); // Setup CIRI with robot radius and iteration number
 
     for (int i = 0; i < n - 1; ++i) 
     {
@@ -779,6 +779,36 @@ void ObstacleFree::visualizeCIRI(std::vector<Eigen::MatrixX4d> &hpolys, pcl::vis
     viewer->addPolygonMesh(polyMesh, "polytope_mesh_"+std::to_string(id));
 }
 
+// void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_obs, pcl::visualization::PCLVisualizer::Ptr &viewer, int id)
+// {
+//     double r = ((id + 1) * 77) % 256 / 255.0;
+//     double g = ((id + 1) * 137) % 256 / 255.0;
+//     double b = ((id + 1) * 199) % 256 / 255.0;
+
+//     for (int i = 0; i < tangent_obs.size(); i++)
+//     {
+//         geometry_utils::Ellipsoid obs = tangent_obs[i];
+//         auto center = obs.d();  // Ellipsoid center
+//         auto shape_matrix = obs.C();  // Shape matrix (assumed to be covariance-like)
+
+//         // Compute SVD decomposition
+//         // Eigen::JacobiSVD<Eigen::Matrix3d> svd(shape_matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
+//         Eigen::JacobiSVD<Eigen::Matrix3d, Eigen::FullPivHouseholderQRPreconditioner> svd(shape_matrix, Eigen::ComputeFullU);
+//         Eigen::Matrix3d U = svd.matrixU();
+//         Eigen::Vector3d radii = svd.singularValues().cwiseSqrt();
+//         // Create transformation matrix
+//         Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+//         transform.translation() << center[0], center[1], center[2];
+//         transform.linear() = U;  // Apply rotation from singular vectors
+//         std::string ellipsoid_id = "ellipsoid_" + std::to_string(i) + "_" + std::to_string(id);
+
+//         // Add ellipsoid with correct radii and orientation
+//         viewer->addEllipsoid(transform, radii[0], radii[1], radii[2], ellipsoid_id);
+//         viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, r, g, b, ellipsoid_id);
+//         viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, ellipsoid_id);
+//     }
+// }
+
 void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_obs, pcl::visualization::PCLVisualizer::Ptr &viewer, int id)
 {
     double r = ((id + 1) * 77) % 256/255.0;
@@ -790,7 +820,9 @@ void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_
         geometry_utils::Ellipsoid obs = tangent_obs[i];
         auto center = obs.d();
         auto axes = obs.r();
+        auto Rot = obs.R();
         Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+        transform.linear() = Rot;
         transform.translation() << center[0], center[1], center[2];
 
         std::string ellipsoid_id = "ellipsoid_" + std::to_string(i) + "_" + std::to_string(id);
@@ -1039,7 +1071,7 @@ int main(int argc, char** argv)
         b[1] = 0.0;
         b[2] = 1.0;
 
-        Eigen::Vector3d min_pt{-9.0, -9.0, 0.0};
+        Eigen::Vector3d min_pt{-9.0, -9.0, -9.0};
         Eigen::Vector3d max_pt{9.0, 9.0, 9.0};
         Eigen::Vector3d o = min_pt;
         pcl::PointCloud<pcl::PointXYZ>::Ptr demo_input_cloud(new pcl::PointCloud<pcl::PointXYZ>());
@@ -1065,7 +1097,7 @@ int main(int argc, char** argv)
         seed_pt_cloud->points.push_back(a_pt);
         seed_pt_cloud->points.push_back(b_pt);
         
-        int num_points = 5;
+        int num_points = 50;
         for(int i=0; i<num_points; i++)
         {
             double x = dis_x(gen);
@@ -1099,18 +1131,18 @@ int main(int argc, char** argv)
         std::vector<geometry_utils::Ellipsoid> tangent_obs;
         std::vector<geometry_utils::Ellipsoid> tangent_obs2;
         
-        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys, o, tangent_obs, true);
-        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys2, o, tangent_obs2, false);
+        sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.5, _uav_size, CIRI_hpolys, o, tangent_obs, true);
+        // sfc_generator.convexCoverCIRI(path_rrt, demo_points, min_pt, max_pt, 1.0, _uav_size, CIRI_hpolys2, o, tangent_obs2, false);
 
         std::cout<<"CIRI_hpolys[0]: "<<CIRI_hpolys[0]<<std::endl;
         
         pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Polytope Visualization"));
         int id = 0;
         sfc_generator.visualizeCIRI(CIRI_hpolys, viewer, id);
-        sfc_generator.visualizeCIRI(CIRI_hpolys2, viewer, ++id);
+        // sfc_generator.visualizeCIRI(CIRI_hpolys2, viewer, ++id);
         id = 0;
         sfc_generator.visualizeObs(tangent_obs, viewer, id);
-        sfc_generator.visualizeObs(tangent_obs2, viewer, ++id);
+        // sfc_generator.visualizeObs(tangent_obs2, viewer, ++id);
         viewer->addPointCloud(demo_input_cloud, "input_pcd");
         viewer->addPointCloud(seed_pt_cloud, "seed_pcd");
 
@@ -1123,7 +1155,7 @@ int main(int argc, char** argv)
             point_rgba.z = demo_points[i][2];
 
             // Create an Isometry3d transformation matrix for the ellipsoid's position
-            viewer->addSphere(point_rgba, _uav_size, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
+            // viewer->addSphere(point_rgba, _uav_size, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
 
         }
         

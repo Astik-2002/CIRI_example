@@ -99,7 +99,9 @@ namespace super_planner {
                                              const Eigen::Vector3d& seed_p,
                                              Eigen::Vector4d& outer_plane);
             
-        
+        super_utils::Mat3f computeCovariance(const Eigen::Vector3d& point);
+        super_utils::Mat3f computeRotation(const Eigen::Vector3d& point, const Eigen::Vector3d &o);
+
         double checkTangency(const Ellipsoid& E, const Eigen::Vector4d& plane);
 
         static double distancePointToSegment(const Eigen::Vector3d& P, const Eigen::Vector3d& A, const Eigen::Vector3d& B) {
