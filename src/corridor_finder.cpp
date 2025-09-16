@@ -83,9 +83,10 @@ void safeRegionRrtStar::setStartPt( Vector3d startPt, Vector3d endPt)
 void safeRegionRrtStar::setPt( Vector3d startPt, Vector3d endPt, double xl, double xh, double yl, double yh, double zl, double zh,
                            double local_range, int max_iter, double sample_portion, double goal_portion )
 {
+    best_distance = INFINITY;  
     start_pt = startPt;
     end_pt   = endPt; 
-    
+    std::cout<<"start pt: "<<startPt.transpose()<<" : endpt: "<<endPt.transpose()<<std::endl;
     x_l = xl; x_h = xh;
     y_l = yl; y_h = yh;
     z_l = zl; z_h = zh;

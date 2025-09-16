@@ -1,4 +1,5 @@
 #include "ObstacleFree.hpp"
+#include "corridor_finder_dynamic.h"
 #include "corridor_finder.h"
 #include "trajectory.hpp"
 #include "gcopter.hpp"
@@ -46,6 +47,46 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr ObstacleFree::loadCSVToPointCloud(const std:
     cloud->is_dense = true;
 
     return cloud;
+}
+
+std::vector<Eigen::Matrix3d> ObstacleFree::loadCSVToBbox(const std::string &filename)
+{
+    std::ifstream file(filename);
+    std::vector<Eigen::Matrix3d> dynamic_bbox;
+    if (!file.is_open()) {
+        std::cerr << "Could not open the file: " << filename << std::endl;
+        return dynamic_bbox;
+    }
+
+    std::string line;
+    // Skip the header line if there's any
+    std::getline(file, line);
+
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string c_x, c_y, c_z;
+        std::string v_x, v_y, v_z;
+        std::string h, l, w;
+
+        std::getline(ss, c_x, ',');
+        std::getline(ss, c_y, ',');
+        std::getline(ss, c_z, ',');
+        std::getline(ss, h, ',');
+        std::getline(ss, l, ',');
+        std::getline(ss, w, ',');
+        std::getline(ss, v_x, ',');
+        std::getline(ss, v_y, ',');
+        std::getline(ss, v_z, ',');
+        
+        Eigen::Matrix3d mat;
+        mat << std::stod(c_x), std::stod(c_y), std::stod(c_z),
+               std::stod(v_x),   std::stod(v_y),   std::stod(v_z),
+               std::stod(h), std::stod(l), std::stod(w);
+
+        dynamic_bbox.push_back(mat);
+    }
+
+    return dynamic_bbox;
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr ObstacleFree::addDepthDependentPoissonNoise(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, float noise_scaling_factor) 
@@ -275,113 +316,7 @@ void ObstacleFree::convexCover(const Eigen::MatrixXd &path,
     }
 
 }
-/*
-void ObstacleFree::convexCoverCIRI(const Eigen::MatrixXd &path, 
-                        const std::vector<Eigen::Vector3d> &points,
-                        const Eigen::Vector3d &lowCorner,
-                        const Eigen::Vector3d &highCorner,
-                        const double &range,
-                        const double &uav_size,
-                        std::vector<Eigen::MatrixX4d> &hpolys,
-                        const Eigen::Vector3d &o,
-                        bool uncertanity,
-                        const double eps)
-{
-    hpolys.clear();
-    int n = int(path.rows());
-    std::vector<Eigen::Vector3d> temp;
-    for(int i=0; i<n; i++)
-    {
-        temp.emplace_back(path(i, 0), path(i, 1), path(i, 2));
-    }
-    Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
-        bd(0, 0) = 1.0;
-        bd(1, 0) = -1.0;
-        bd(2, 1) = 1.0;
-        bd(3, 1) = -1.0;
-        bd(4, 2) = 1.0;
-        bd(5, 2) = -1.0;
-    
-    Eigen::MatrixX4d hp, gap;
-    Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
-    Eigen::Vector3d a;
-    Eigen::Vector3d b;
-    std::vector<Eigen::Vector3d> valid_pc;
-    std::vector<Eigen::Vector3d> bs;
-    valid_pc.reserve(points.size());
-    super_planner::CIRI ciri;
-    ciri.setupParams(uav_size, 10); // Setup CIRI with robot radius and iteration number
-    std::cout<<"[ciri debug] temp_size:"<< temp.size()<<std::endl;
 
-    for (int i = 0; i < temp.size();i++)
-    {
-        std::cout<<"[ciri debug] current pair "<<i<<":"<<i+1<<std::endl;
-        if(uncertanity)
-        {
-            std::cout<<"[ciri debug] stochastic polygons "<<std::endl;
-        }
-        else
-        {
-            std::cout<<"[ciri debug] deterministic polygons "<<std::endl;
-        }
-        
-        Eigen::Vector3d path_point = temp[i];
-        a = b;
-        b = path_point;
-        bs.emplace_back(b);
-
-        bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
-        bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
-        bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
-        bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
-        bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
-        bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
-
-        valid_pc.clear();
-        for (const Eigen::Vector3d &p : points)
-        {
-            if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
-            {
-                valid_pc.emplace_back(p);
-            }
-        }
-        if (valid_pc.empty()) {
-            std::cerr << "No valid points found for the current segment." << std::endl;
-            // hp = bd;
-            // hpolys.emplace_back(hp);
-            continue;
-        }
-
-        Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
-
-        if (ciri.convexDecomposition(bd, pc, a, b, o, uncertanity) != super_utils::SUCCESS) {
-            std::cerr << "CIRI decomposition failed." << std::endl;
-            continue;
-        }
-
-        geometry_utils::Polytope optimized_poly;
-        ciri.getPolytope(optimized_poly);
-        hp = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
-
-        // if (hpolys.size() != 0)
-        // {
-        //     const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
-        //     if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
-        //                      ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
-        //     {
-        //         if (ciri.convexDecomposition(bd, pc, a, a, o, uncertanity) != super_utils::SUCCESS) {
-        //             std::cerr << "CIRI decomposition failed." << std::endl;
-        //             continue;
-        //         }
-        //         ciri.getPolytope(optimized_poly);
-        //         gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
-        //         hpolys.emplace_back(gap);
-        //     }
-        // }
-        hpolys.emplace_back(hp);
-    }
-}
-*/
 void ObstacleFree::convexCoverCIRI(const Eigen::MatrixXd &path, 
     const std::vector<Eigen::Vector3d> &points,
     const Eigen::Vector3d &lowCorner,
@@ -454,7 +389,7 @@ void ObstacleFree::convexCoverCIRI(const Eigen::MatrixXd &path,
 
         Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
 
-        if (ciri.convexDecomposition(bd, pc, a, b, o, tangent_obs, uncertanity) != super_utils::SUCCESS) 
+        if (ciri.convexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) 
         {
             std::cerr << "CIRI decomposition failed." << std::endl;
             continue;
@@ -581,7 +516,8 @@ void ObstacleFree::findPointCloudLimits(pcl::PointCloud<pcl::PointXYZ>::Ptr clou
 }
 
 
-void ObstacleFree::visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &viewer, const std::vector<Eigen::MatrixX4d> &hPolys, pcl::PointCloud<pcl::PointXYZ>::Ptr &input_cloud, Eigen::MatrixXd &Path_rrt, const std::vector<NodePtr> nodelist, const Trajectory<5> &traj) {
+void ObstacleFree::visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &viewer, const std::vector<Eigen::MatrixX4d> &hPolys, pcl::PointCloud<pcl::PointXYZ>::Ptr &input_cloud, Eigen::MatrixXd &Path_rrt, const std::vector<NodePtr> nodelist, const Trajectory<5> &traj) 
+{
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
     std::vector<pcl::Vertices> polygons;
@@ -689,6 +625,143 @@ void ObstacleFree::visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &
     viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "trajectory_points");
 }
 
+void ObstacleFree::visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &viewer, const std::vector<Eigen::MatrixX4d> &hPolys, pcl::PointCloud<pcl::PointXYZ>::Ptr &input_cloud, Eigen::MatrixXd &Path_rrt, const std::vector<NodePtr_dynamic> nodelist, const Trajectory<5> &traj) 
+{
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    std::vector<pcl::Vertices> polygons;
+
+    for (const auto &hPoly : hPolys) {
+        Eigen::Matrix<double, 3, -1, Eigen::ColMajor> vPoly;
+        geo_utils::enumerateVs(hPoly, vPoly);
+
+        quickhull::QuickHull<double> tinyQH;
+        const auto polyHull = tinyQH.getConvexHull(vPoly.data(), vPoly.cols(), false, true);
+        const auto &idxBuffer = polyHull.getIndexBuffer();
+
+        // Add vertices to PCL PointCloud
+        int baseIndex = cloud->size();
+        for (int i = 0; i < vPoly.cols(); ++i) {
+            cloud->emplace_back(vPoly(0, i), vPoly(1, i), vPoly(2, i));
+        }
+
+        // Add triangles to PCL PolygonMesh
+        for (size_t i = 0; i < idxBuffer.size(); i += 3) {
+            pcl::Vertices triangle;
+            triangle.vertices.push_back(baseIndex + idxBuffer[i]);
+            triangle.vertices.push_back(baseIndex + idxBuffer[i + 1]);
+            triangle.vertices.push_back(baseIndex + idxBuffer[i + 2]);
+            polygons.push_back(triangle);
+        }
+    }
+
+    // Convert to PolygonMesh
+    pcl::PolygonMesh polyMesh;
+    pcl::toPCLPointCloud2(*cloud, polyMesh.cloud);
+    polyMesh.polygons = polygons;
+    
+    pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_rgba(new pcl::PointCloud<pcl::PointXYZRGBA>);
+        for(int i=0; i<int(Path_rrt.rows()); i++)
+        {
+            pcl::PointXYZRGBA point_rgba;
+            point_rgba.x = Path_rrt(i, 0);
+            point_rgba.y = Path_rrt(i, 1);
+            point_rgba.z = Path_rrt(i, 2);
+            
+            // Set the color fields, here we initialize them to a default value
+            point_rgba.r = 0; // Red channel
+            point_rgba.g = 0; // Green channel
+            point_rgba.b = 255; // Blue channel
+            point_rgba.a = 255; // Alpha channel
+            // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
+            // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
+
+            path_rgba->points.push_back(point_rgba);
+        }
+    
+    pcl::PointCloud<pcl::PointXYZRGBA>::Ptr node_rgba(new pcl::PointCloud<pcl::PointXYZRGBA>);
+    for( int i=0; i<nodelist.size(); i++)
+    {
+        pcl::PointXYZRGBA point_rgba;
+            point_rgba.x = nodelist[i]->coord[0];
+            point_rgba.y = nodelist[i]->coord[1];
+            point_rgba.z = nodelist[i]->coord[2];
+            
+            // Set the color fields, here we initialize them to a default value
+            point_rgba.r = 255; // Red channel
+            point_rgba.g = 0; // Green channel
+            point_rgba.b = 0; // Blue channel
+            point_rgba.a = 255; // Alpha channel
+            // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
+            // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
+
+            node_rgba->points.push_back(point_rgba);
+    }
+
+
+    // Trajectory visualization
+    
+    pcl::PointCloud<pcl::PointXYZRGBA>::Ptr traj_points(new pcl::PointCloud<pcl::PointXYZRGBA>());
+    double T = 0.01; // Sampling interval
+    Eigen::Vector3d lastX = traj.getPos(0.0);
+
+    for (double t = T; t < traj.getTotalDuration(); t += T) {
+        Eigen::Vector3d X = traj.getPos(t);
+
+        // Add the current point to the trajectory point cloud
+        pcl::PointXYZRGBA point;
+        point.x = X(0);
+        point.y = X(1);
+        point.z = X(2);
+        point.r = 0;
+        point.g = 255;
+        point.b = 0;
+        point.a = 255;
+        traj_points->points.push_back(point);
+    }
+
+    // Visualize using PCL
+    viewer->addPolygonMesh(polyMesh, "polytope_mesh");
+    viewer->addPointCloud(input_cloud, "pcd");
+    viewer->addPointCloud(path_rgba, "rrt path");
+    viewer->addPointCloud(traj_points, "trajectory_points");
+    viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.7, "pcd");
+    // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "pcd");
+
+    // viewer->addPointCloud(node_rgba,"nodelist");
+    viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 8, "rrt path");
+    // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1, "pcd");
+    viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "trajectory_points");
+}
+
+bool ObstacleFree::isNodeCollisionFree(NodePtr_dynamic node,
+                         const pcl::PointCloud<pcl::PointXYZ>::Ptr& static_cloud,
+                         const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& dynamic_points,
+                         double t,
+                         double safe_radius)
+{
+    const Eigen::Vector3d pos = node->coord.head<3>();
+    const double radius_sq = safe_radius * safe_radius;
+
+    // 1. Check against static obstacles
+    for (const auto& pt : static_cloud->points)
+    {
+        Eigen::Vector3d obst(pt.x, pt.y, pt.z);
+        if ((obst - pos).squaredNorm() <= radius_sq)
+            return false; // collision with static obstacle
+    }
+
+    // 2. Check against dynamic obstacles at time t
+    for (const auto& dyn_pair : dynamic_points)
+    {
+        Eigen::Vector3d dyn_pos = dyn_pair.first + dyn_pair.second * t;
+        if ((dyn_pos - pos).squaredNorm() <= radius_sq)
+            return false; // collision with dynamic obstacle
+    }
+
+    return true; // no collision
+}
+
 inline void ObstacleFree::shortCut(std::vector<Eigen::MatrixX4d> &hpolys)
 {
     std::vector<Eigen::MatrixX4d> htemp = hpolys;
@@ -779,35 +852,130 @@ void ObstacleFree::visualizeCIRI(std::vector<Eigen::MatrixX4d> &hpolys, pcl::vis
     viewer->addPolygonMesh(polyMesh, "polytope_mesh_"+std::to_string(id));
 }
 
-// void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_obs, pcl::visualization::PCLVisualizer::Ptr &viewer, int id)
-// {
-//     double r = ((id + 1) * 77) % 256 / 255.0;
-//     double g = ((id + 1) * 137) % 256 / 255.0;
-//     double b = ((id + 1) * 199) % 256 / 255.0;
+void ObstacleFree::visualizeTemporalCIRI(
+    const std::vector<Eigen::MatrixX4d> &hpolys, 
+    const std::vector<double> &time_stamps,
+    pcl::visualization::PCLVisualizer::Ptr &viewer,
+    const std::string &base_name) 
+{
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
+    std::vector<pcl::Vertices> polygons;
 
-//     for (int i = 0; i < tangent_obs.size(); i++)
-//     {
-//         geometry_utils::Ellipsoid obs = tangent_obs[i];
-//         auto center = obs.d();  // Ellipsoid center
-//         auto shape_matrix = obs.C();  // Shape matrix (assumed to be covariance-like)
+    // Same palette + gradient as obstacles
+    static const std::vector<std::tuple<int, int, int>> color_palette = {
+                {255, 0, 0},  
+                {213, 42, 42},    
+                {171, 84, 84},      
+                {129, 126, 126},    
+                {87, 168, 168}       
+            };
 
-//         // Compute SVD decomposition
-//         // Eigen::JacobiSVD<Eigen::Matrix3d> svd(shape_matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
-//         Eigen::JacobiSVD<Eigen::Matrix3d, Eigen::FullPivHouseholderQRPreconditioner> svd(shape_matrix, Eigen::ComputeFullU);
-//         Eigen::Matrix3d U = svd.matrixU();
-//         Eigen::Vector3d radii = svd.singularValues().cwiseSqrt();
-//         // Create transformation matrix
-//         Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-//         transform.translation() << center[0], center[1], center[2];
-//         transform.linear() = U;  // Apply rotation from singular vectors
-//         std::string ellipsoid_id = "ellipsoid_" + std::to_string(i) + "_" + std::to_string(id);
+    auto applyGradient = [](int r, int g, int b, double factor) {
+        int nr = std::clamp(int(r * factor), 0, 255);
+        int ng = std::clamp(int(g * factor), 0, 255);
+        int nb = std::clamp(int(b * factor), 0, 255);
+        return std::make_tuple(nr, ng, nb);
+    };
 
-//         // Add ellipsoid with correct radii and orientation
-//         viewer->addEllipsoid(transform, radii[0], radii[1], radii[2], ellipsoid_id);
-//         viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, r, g, b, ellipsoid_id);
-//         viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, ellipsoid_id);
-//     }
-// }
+    const int NUM_COLOR_STEPS = 5;  // Number of distinct colors to cycle through
+    const int COLORS_PER_STEP = std::max(3, int((time_stamps.size() + 1) / NUM_COLOR_STEPS));
+    int ciri_idx = 0;
+
+    for (size_t poly_idx = 0; poly_idx < hpolys.size(); ++poly_idx) {
+        const auto &hPoly = hpolys[poly_idx];
+
+        // Choose base color based on time bin
+        int color_index = (ciri_idx / COLORS_PER_STEP) % color_palette.size();
+        auto [r_base, g_base, b_base] = color_palette[color_index];
+
+        // Gradient factor within bin
+        int step_offset = ciri_idx % COLORS_PER_STEP;
+        double gradient_factor = 0.5 + 0.5 * (double(step_offset) / std::max(1, COLORS_PER_STEP - 1));
+        auto [r, g, b] = applyGradient(r_base, g_base, b_base, gradient_factor);
+
+        // Extract vertices
+        Eigen::Matrix<double, 3, -1, Eigen::ColMajor> vPoly;
+        geo_utils::enumerateVs(hPoly, vPoly);
+
+        // Convex hull
+        quickhull::QuickHull<double> tinyQH;
+        const auto polyHull = tinyQH.getConvexHull(vPoly.data(), vPoly.cols(), false, true);
+        const auto &idxBuffer = polyHull.getIndexBuffer();
+
+        // Add vertices with color
+        int baseIndex = cloud->size();
+        for (int i = 0; i < vPoly.cols(); ++i) {
+            pcl::PointXYZRGB point;
+            point.x = vPoly(0, i);
+            point.y = vPoly(1, i);
+            point.z = vPoly(2, i);
+            point.r = r;
+            point.g = g;
+            point.b = b;
+            cloud->push_back(point);
+        }
+
+        // Add triangles
+        for (size_t i = 0; i < idxBuffer.size(); i += 3) {
+            pcl::Vertices triangle;
+            triangle.vertices.push_back(baseIndex + idxBuffer[i]);
+            triangle.vertices.push_back(baseIndex + idxBuffer[i + 1]);
+            triangle.vertices.push_back(baseIndex + idxBuffer[i + 2]);
+            polygons.push_back(triangle);
+        }
+
+        ++ciri_idx;  // advance color counter per poly
+    }
+
+    // Build polygon mesh
+    pcl::PolygonMesh polyMesh;
+    pcl::toPCLPointCloud2(*cloud, polyMesh.cloud);
+    polyMesh.polygons = polygons;
+    
+    viewer->addPolygonMesh(polyMesh, base_name);
+    viewer->setPointCloudRenderingProperties(
+        pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, base_name);
+}
+
+// Add this function to your ObstacleFree class
+std::tuple<int, int, int> ObstacleFree::timeToColor(double time, double max_time, bool use_gradient) 
+{
+    // Define the specific color palette in order
+    static const std::vector<std::tuple<int, int, int>> color_palette = {
+        {255, 105, 180},  // Pink
+        {255, 255, 0},    // Yellow
+        {0, 0, 255},      // Blue
+        {0, 255, 0},      // Green
+        {255, 0, 0}       // Red
+    };
+    
+    if (!use_gradient) {
+        // Fixed color for time ranges
+        double normalized_time = std::fmod(time, max_time) / max_time;
+        int color_index = std::min(static_cast<int>(normalized_time * color_palette.size()), 
+                                  static_cast<int>(color_palette.size() - 1));
+        return color_palette[color_index];
+    }
+    
+    // Gradient blending between colors
+    double normalized_time = std::fmod(time, max_time) / max_time;
+    double segment = normalized_time * (color_palette.size() - 1);
+    int segment_index = static_cast<int>(segment);
+    double blend_factor = segment - segment_index;
+    
+    if (segment_index >= color_palette.size() - 1) {
+        return color_palette.back();
+    }
+    
+    auto [r1, g1, b1] = color_palette[segment_index];
+    auto [r2, g2, b2] = color_palette[segment_index + 1];
+    
+    int r = static_cast<int>(r1 * (1 - blend_factor) + r2 * blend_factor);
+    int g = static_cast<int>(g1 * (1 - blend_factor) + g2 * blend_factor);
+    int b = static_cast<int>(b1 * (1 - blend_factor) + b2 * blend_factor);
+    
+    return {r, g, b};
+}
 
 void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_obs, pcl::visualization::PCLVisualizer::Ptr &viewer, int id)
 {
@@ -835,6 +1003,174 @@ void ObstacleFree::visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_
     }
 }
 
+Eigen::Matrix3Xd ObstacleFree::getObstaclePoints_continous(double &t1, double &t2, double PCDstart_time, pcl::PointCloud<pcl::PointXYZ> cloud_input, std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points, Eigen::Matrix<double, 6, 4> &bd)
+{
+    Eigen::Matrix3Xd obstacle_points(3,0);
+    int k = cloud_input.points.size();
+    for (int i=0; i<k; i++)
+    {
+        auto pt = cloud_input.points[i];
+        Eigen::Vector3d pos(pt.x, pt.y, pt.z);
+        if ((bd.leftCols<3>() * pos + bd.rightCols<1>()).maxCoeff() < 0.0)
+        {
+            obstacle_points.conservativeResize(3, obstacle_points.cols() + 1);
+            obstacle_points.col(obstacle_points.cols() - 1) = pos;
+        }
+    }
+    // std::cout<<"input cloud size: "<<k<<std::endl;
+    for (const auto& [position, velocity] : dynamic_points)
+    {
+        for(double t = t1; t <= t2; t += 0.2)
+        {
+            Eigen::Vector3d pos = position + (t-PCDstart_time)*velocity;
+            if ((bd.leftCols<3>() * pos + bd.rightCols<1>()).maxCoeff() < 0.0)
+            {
+                obstacle_points.conservativeResize(3, obstacle_points.cols() + 1);
+                obstacle_points.col(obstacle_points.cols() - 1) = pos;
+            }
+        }
+    }
+
+    return obstacle_points;
+}
+
+void ObstacleFree::convexCoverCIRI_dynamic(
+        pcl::PointCloud<pcl::PointXYZ> cloud_input, 
+        std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points,
+        const std::vector<Eigen::Vector4d> &path, 
+        const Eigen::Vector3d &lowCorner,
+        const Eigen::Vector3d &highCorner,
+        const double &range,
+        std::vector<Eigen::MatrixX4d> &hpolys,
+        double PCDStart_time,
+        double _uav_radius,
+        std::vector<double> &time_vector_poly,
+        const double eps)
+    {
+        super_planner::CIRI ciri;
+
+        hpolys.clear();
+        int n = int(path.size());
+        
+        Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+        bd(0, 0) = 1.0;
+        bd(1, 0) = -1.0;
+        bd(2, 1) = 1.0;
+        bd(3, 1) = -1.0;
+        bd(4, 2) = 1.0;
+        bd(5, 2) = -1.0;
+
+        Eigen::MatrixX4d hp, gap;
+        Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
+        Eigen::Vector3d a(path[0][0], path[0][1], path[0][2]);
+        Eigen::Vector3d b = a;
+        time_vector_poly.clear();
+        std::vector<Eigen::Vector3d> valid_pc;
+        std::vector<Eigen::Vector3d> bs;
+        valid_pc.reserve(cloud_input.points.size());
+        ciri.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
+        for (int i = 1; i < n;)
+        {
+            Eigen::Vector3d path_point = path[i].head<3>();
+            a = b;
+            b = path_point;
+            double t1 = 0.0;
+            if(i != 0)
+            {
+                t1 = path[i-1][3];
+            }
+            double t2 = path[i][3];
+            time_vector_poly.push_back(t2-t1);
+            i++;
+            bs.emplace_back(b);
+
+            bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
+            bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
+            bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
+            bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
+            bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
+            bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
+
+            valid_pc.clear();
+            t1 -= PCDStart_time;
+            t2 -= PCDStart_time;
+            Eigen::Matrix3Xd pc = getObstaclePoints_continous(t1, t2, PCDStart_time, cloud_input, dynamic_points, bd);
+
+            if (pc.cols() == 0) {
+                Eigen::MatrixX4d temp_bp = bd;
+                hpolys.emplace_back(temp_bp);
+                continue;
+            }
+            if (ciri.convexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) {
+                std::cerr << "CIRI decomposition failed." << std::endl;
+                time_vector_poly.pop_back();
+                continue;
+            }
+
+            geometry_utils::Polytope optimized_poly;
+            ciri.getPolytope(optimized_poly);
+            hp = optimized_poly.GetPlanes();
+
+            if (hpolys.size() != 0)
+            {
+                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                            ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                {   
+                    if (ciri.convexDecomposition(bd, pc, a, a) != super_utils::SUCCESS) 
+                    {
+                        std::cerr << "CIRI decomposition failed." << std::endl;
+                        continue;
+                    }
+                    time_vector_poly.push_back(2.0);
+                    ciri.getPolytope(optimized_poly);
+                    gap = optimized_poly.GetPlanes();
+                    hpolys.emplace_back(gap);
+                }
+            }
+            hpolys.emplace_back(hp);
+        }
+    }
+
+void ObstacleFree::pcd_segmentation(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in, std::vector<Eigen::Matrix3d> bboxes, std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> &dynamic_points)
+{
+    dynamic_points.clear();
+    std::cout<<"seg check1"<<std::endl;
+    // Efficient segmentation and filtering using std::remove_if
+
+    auto& points = cloud_in->points;
+    std::cout<<"seg check2"<<std::endl;
+
+    auto new_end = std::remove_if(points.begin(), points.end(),
+        [&](const pcl::PointXYZ& point) {
+            for (const auto& bbox : bboxes)
+            {
+                double cx = bbox(0, 0), cy = bbox(0, 1), cz = bbox(0, 2);
+                double half_height = bbox(2, 0) / 2.0;
+                double half_length = bbox(2, 1) / 2.0;
+                double half_width  = bbox(2, 2) / 2.0;
+                Eigen::Vector3d bbox_velocity(bbox(1, 0), bbox(1, 1), bbox(1, 2));
+                if (point.x >= cx - half_length && point.x <= cx + half_length &&
+                    point.y >= cy - half_width  && point.y <= cy + half_width &&
+                    point.z >= cz - half_height && point.z <= cz + half_height)
+                {
+                    dynamic_points.emplace_back(Eigen::Vector3d(point.x, point.y, point.z), bbox_velocity);
+                    return true;  // Remove from static cloud
+                }
+            }
+            return false;  // Keep in static cloud
+        });
+    std::cout<<"seg check3"<<std::endl;
+
+    points.erase(new_end, points.end());  
+    std::cout<<"seg check4"<<std::endl;
+  
+    points.shrink_to_fit();
+    std::cout<<"seg check5"<<std::endl;
+
+}
+
+
 int main(int argc, char** argv)
 {
     vtkObject::GlobalWarningDisplayOff();
@@ -846,26 +1182,29 @@ int main(int argc, char** argv)
     std::cout<<"printing for debugging1"<<std::endl;
     ObstacleFree sfc_generator;
     Trajectory<5> traj;
-
+    Trajectory<5> traj_fixedtime;
+    safeRegionRrtStarDynamic rrt_dynamic;
     safeRegionRrtStar rrt_path_gen;
     // rrt gen parameters
-    float _uav_size = 0.4;
-    float _safety_margin = 1.5*_uav_size;
-    float _search_margin = 0.5;
+    float _uav_size = 0.5;
+    float _safety_margin = 0.7;
+    float _search_margin = 0.2;
     float _max_radius = 5.0;
     float _sensing_range = 25.0;
 
     float x_l = 0.0;
-    float x_h = 12.0;
-    float y_l = -7.0;
-    float y_h = 7.0;
-    float z_l = 0.0;
-    float z_l2 = 0.0;
+    float x_h = 45.0;
+    float y_l = -15.0;
+    float y_h = 15.0;
+    float z_l = 0.5;
+    float z_l2 = 0.5;
     float z_h = 5.5;
     float z_h2 = 5.5;
-    float local_range = 2.0, sample_portion=0.25, goal_portion=0.05;
+    float local_range = 20.0, sample_portion=0.25, goal_portion=0.1;
     int max_iter=100000;
-    std::string csv_file = argv[1];
+    std::string folder_name = argv[1];
+    std::string csv_file = folder_name + "/pcd_" + folder_name.substr(folder_name.size() - 4) + ".csv";
+    std::string bbox_file = folder_name + "/bbox_array_" + folder_name.substr(folder_name.size() - 4) + ".csv";
     float voxelWidth = 0.25;
     float dilateRadius = 0.50;
     float leafsize = 0.50;
@@ -876,37 +1215,46 @@ int main(int argc, char** argv)
     const Eigen::Vector3d offset(x_l, y_l, z_l2);
 
     voxel_map::VoxelMap V_map(xyz, offset, voxelWidth);
+    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points;
+
     auto input_cloud = sfc_generator.loadCSVToPointCloud(csv_file);
+    auto bbox_dynamic = sfc_generator.loadCSVToBbox(bbox_file);
+
     std::cout<<"printing for debugging2"<<std::endl;
     if (!input_cloud) {
         std::cerr << "Failed to load point cloud from CSV." << std::endl;
         return -1;
     }
     
+    if (bbox_dynamic.size() == 0) {
+        std::cerr << "Failed to load bbox from CSV." << std::endl;
+    }
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud(input_cloud);
+    voxel_filter.setLeafSize(leafsize, leafsize, leafsize); // Set the voxel grid size (adjust as needed)
+    voxel_filter.filter(*filtered_cloud);
+
+    
+    std::cout<<"input pointcloud size before segmentation: "<<input_cloud->points.size()<<std::endl;
+
+    sfc_generator.pcd_segmentation(input_cloud, bbox_dynamic, dynamic_points);
+
+    std::cout<<"input pointcloud size after segmentation: "<<input_cloud->points.size()<<std::endl;
+    std::cout<<"dynamic pointcloud size after segmentation: "<<dynamic_points.size()<<std::endl;
 
     Eigen::Vector3d origin(0.0, 0.0, 0.0);
-    Eigen::Vector3d a(0.0, 0.0, 1.0);
-    Eigen::Vector3d b(30.0, -3.0, 1.0);
+    Eigen::Vector3d a(0.0, -2.0, 0.8);
+    Eigen::Vector3d b(13.0, -2.0, 1.0);
 
     sfc_generator.pclToVoxelMap(input_cloud, V_map, dilateRadius );
-    std::vector<Eigen::Vector3d> eigen_points;
 
     auto time_bef_voxel_gen = std::chrono::steady_clock::now();
-    V_map.getSurf(eigen_points);
     auto time_aft_voxel_gen = std::chrono::steady_clock::now();
     auto elapsed_voxel = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_voxel_gen - time_bef_voxel_gen).count()*0.001;
     std::cout<<"[voxel comparision] time taken in voxel dilation: "<<elapsed_voxel<<std::endl;
     pcl::PointCloud<pcl::PointXYZ>::Ptr V_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
 
-    for(auto point : eigen_points)
-    {
-        pcl::PointXYZ pcd_point;
-        pcd_point.x = point(0);
-        pcd_point.y = point(1);
-        pcd_point.z = point(2);
-        V_map_cloud->points.push_back(pcd_point);
-
-    }
     pcl::PointCloud<pcl::PointXYZ>::Ptr inflated_cloud(new pcl::PointCloud<pcl::PointXYZ>());
     auto time_bef_voxel_inf = std::chrono::steady_clock::now();
 
@@ -918,142 +1266,224 @@ int main(int argc, char** argv)
     std::cout<<"input pointcloud size: "<<input_cloud->points.size()<<std::endl;
     std::cout<<"dilated pcd size: "<<inflated_cloud->points.size()<<std::endl;
     
-    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
-    voxel_filter.setInputCloud(input_cloud);
-    voxel_filter.setLeafSize(leafsize, leafsize, leafsize); // Set the voxel grid size (adjust as needed)
-    voxel_filter.filter(*filtered_cloud);
-
     std::cout<<"input pointcloud size: "<<input_cloud->points.size()<<std::endl;
     std::cout<<"dilated pcd size: "<<inflated_cloud->points.size()<<std::endl;
     std::cout<<"filtered pcd: "<<filtered_cloud->points.size()<<std::endl;
 
     // Show the point cloud
+    double weight_t = 0.01;
+    double max_vel_rrt = 0.5;
     auto t_rrt_start = std::chrono::steady_clock::now();
-    rrt_path_gen.setInput(*input_cloud, origin);
-    rrt_path_gen.setParam(_safety_margin, _search_margin, _max_radius, _sensing_range);
-    rrt_path_gen.setStartPt(a, b);
-    rrt_path_gen.setPt(a, b, x_l, x_h, y_l, y_h, z_l, z_h, _sensing_range, max_iter, sample_portion, goal_portion);
-    rrt_path_gen.SafeRegionExpansion(0.1);
+    /*
+    // rrt_path_gen.setInput(*input_cloud, origin);
+    // rrt_path_gen.setParam(_safety_margin, _search_margin, _max_radius, _sensing_range);
+    // rrt_path_gen.setStartPt(a, b);
+    // rrt_path_gen.setPt(a, b, x_l, x_h, y_l, y_h, z_l, z_h, _sensing_range, max_iter, sample_portion, goal_portion);
+    // rrt_path_gen.SafeRegionExpansion(0.1);
+    */
+    bool testing_cont = true;
+    double delta_t = 1.0;
+    rrt_dynamic.reset();
+    rrt_dynamic.setParam(_safety_margin, _search_margin, delta_t, 20.0, 90, 90, false);
+    rrt_dynamic.setStartPt(a, b);
+    Eigen::Vector3d min_pt = a.cwiseMin(b);
+    Eigen::Vector3d max_pt = a.cwiseMax(b);
+
+    // Expand by 1.0 in each direction (so box size = 2.0)
+    double x_l_bkup = min_pt.x() - 1.0;
+    double x_h_bkup = max_pt.x() + 1.0;
+    double y_l_bkup = min_pt.y() - 1.0;
+    double y_h_bkup = max_pt.y() + 1.0;
+
+    rrt_dynamic.setInputDynamic(*input_cloud, dynamic_points, a, 0.0);
+    rrt_dynamic.setPt(a, b, x_l_bkup, x_h_bkup, y_l_bkup, y_h_bkup, z_l, z_h,
+                             _sensing_range, max_iter, sample_portion, goal_portion, 0.0, max_vel_rrt, 1.5*max_vel_rrt, weight_t);
+    std::cout<<"parameters set2"<<std::endl;
+    rrt_dynamic.SafeRegionExpansion(0.5, 0.0, true);
     auto t_rrt_end = std::chrono::steady_clock::now();
     auto elapsed_rrt = std::chrono::duration_cast<std::chrono::milliseconds>(t_rrt_end - t_rrt_start).count()*0.001;
     std::cout<<"[time comp] RRT Time taken: "<<elapsed_rrt<<std::endl;
 
-    auto path_radius_pair = rrt_path_gen.getPath();
-    bool path_exist = rrt_path_gen.getPathExistStatus();
+    auto path_radius_pair = rrt_dynamic.getPath();
+    bool path_exist = rrt_dynamic.getPathExistStatus();
 
-/*
-    auto t_rrt_mmd_start = std::chrono::steady_clock::now();
-    rrt_path_gen_mmd.setInput(*input_cloud);
-    rrt_path_gen_mmd.setParam(_safety_margin, _search_margin, _max_radius, _sensing_range);
-    rrt_path_gen_mmd.setStartPt(a, b);
-    rrt_path_gen_mmd.setPt(a, b, x_l, x_h, y_l, y_h, z_l, z_h, _sensing_range, max_iter, sample_portion, goal_portion);
-    rrt_path_gen_mmd.SafeRegionExpansion(150.0);
-    auto t_rrt_mmd_end = std::chrono::steady_clock::now();
-    auto elapsed_mmd = std::chrono::duration_cast<std::chrono::milliseconds>(t_rrt_mmd_end - t_rrt_mmd_start).count()*0.001;
-    std::cout<<"[time comp] RRT Time taken with MMD: "<<elapsed_mmd<<std::endl;
-
-    auto t_rrt_gaus_start = std::chrono::steady_clock::now();
-    rrt_path_gen_gaus.setInput(*input_cloud);
-    rrt_path_gen_gaus.setParam(_safety_margin, _search_margin, _max_radius, _sensing_range);
-    rrt_path_gen_gaus.setStartPt(a, b);
-    rrt_path_gen_gaus.setPt(a, b, x_l, x_h, y_l, y_h, z_l, z_h, _sensing_range, max_iter, sample_portion, goal_portion);
-    rrt_path_gen_gaus.SafeRegionExpansion(150.0);
-    auto t_rrt_gaus_end = std::chrono::steady_clock::now();
-    auto elapsed_gaus = std::chrono::duration_cast<std::chrono::milliseconds>(t_rrt_gaus_end - t_rrt_gaus_start).count()*0.001;
-    std::cout<<"[time comp] RRT Time taken with gaussian: "<<elapsed_gaus<<std::endl;
-
-    auto path_radius_pair = rrt_path_gen.getPath();
-    auto path_rrt1 = rrt_path_gen.getPath().first;
-    bool path_exist = rrt_path_gen.getPathExistStatus();
-
-    auto path_rrt_mmd = rrt_path_gen_mmd.getPath().first;
-    bool path_exist_mmd = rrt_path_gen_mmd.getPathExistStatus();
-
-    auto path_rrt_gaus = rrt_path_gen_gaus.getPath().first;
-    bool path_exist_gaus = rrt_path_gen_gaus.getPathExistStatus();
-
-    if(path_exist && path_exist_mmd && path_exist_gaus)
-    {   
-
-        pcl::visualization::PCLVisualizer::Ptr viewer_temp(new pcl::visualization::PCLVisualizer("Point cloud visualization"));
-        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_rrt_og(new pcl::PointCloud<pcl::PointXYZRGBA>);
-        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_mmd(new pcl::PointCloud<pcl::PointXYZRGBA>);
-        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_gaus(new pcl::PointCloud<pcl::PointXYZRGBA>);
-
-        for(int i=0; i<int(path_rrt1.rows()); i++)
+    bool ciri_testing = false;
+    if(!testing_cont)
+    {
+        if(path_exist)
         {
-            pcl::PointXYZRGBA point_rgba;
-            point_rgba.x = path_rrt1(i,0);
-            point_rgba.y = path_rrt1(i,1);
-            point_rgba.z = path_rrt1(i,2);
-            
-            // Set the color fields, here we initialize them to a default value
-            point_rgba.r = 255; // Red channel
-            point_rgba.g = 0; // Green channel
-            point_rgba.b = 0; // Blue channel
-            point_rgba.a = 100; // Alpha channel
-            // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-            // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-            path_rrt_og->points.push_back(point_rgba);
-        }
+            pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Point cloud visualization"));
+            auto pathList = rrt_dynamic.getPathList();
+            rrt_dynamic.resetRoot(pathList.size()-3);
+            rrt_dynamic.SafeRegionRefine(0.2);
+            rrt_dynamic.SafeRegionEvaluate(0.2);
+            std::vector<NodePtr_dynamic> nodeList = rrt_dynamic.getTree();
+            if(rrt_dynamic.getPathExistStatus())
+            {
+                std::vector<NodePtr_dynamic> pathList = rrt_dynamic.getPathList();
+                // int color_step = std::max(1, int(255.0 / pathList.size())); // color spread
+                const int NUM_COLOR_STEPS = 5;  // Number of distinct colors to cycle through
+                const int COLORS_PER_STEP = std::max(3, int(pathList.size() / NUM_COLOR_STEPS));
+                
+                // Define a set of distinct colors that will cycle
+                const std::vector<std::tuple<int, int, int>> color_palette = {
+                    {87, 168, 168},  
+                    {129, 126, 126},    
+                    {171, 84, 84},      
+                    {213, 42, 42},    
+                    {255, 0, 0}       
+                };
+                int cloud_idx = 0;
+                int line_idx = 0;
+                std::cout<<"[path debug] number of nodes after expansion: "<<nodeList.size()<<std::endl;
+                for (NodePtr_dynamic node : pathList)
+                {
+                    int color_index = (cloud_idx / COLORS_PER_STEP) % color_palette.size();
+                    auto [r, g, b] = color_palette[color_index];
+                    
+                    // Normalize to 0-1 range
+                    double r_norm = r / 255.0;
+                    double g_norm = g / 255.0;
+                    double b_norm = b / 255.0;
+                    if (node->preNode_ptr != nullptr)
+                    {
+                        pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]);
+                        pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]);
+                        viewer->addLine(point1, point2, r_norm, g_norm, b_norm, "line_path" + std::to_string(line_idx++));
+                    }
+                    rrt_dynamic.checkingRadius(node);
 
-        for(int i=0; i<int(path_rrt_mmd.rows()); i++)
+                    // Add transparent sphere at node position with radius = node->radius
+                    std::string sphere_id = "sphere_node_" + std::to_string(cloud_idx);
+                    pcl::PointXYZ sphere_center(node->coord[0], node->coord[1], node->coord[2]);
+                    // if(node->closest_static)
+                    // {
+                    //     viewer->addSphere(sphere_center, node->radius, 1.0, 0.5, 0.0, sphere_id); // orange color
+                    // }
+                    // else
+                    // {
+                    viewer->addSphere(sphere_center, node->radius, r_norm, g_norm, b_norm, sphere_id); // green color
+                    // }
+                    viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.5, sphere_id);
+                    viewer->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 2.0, sphere_id);
+
+                    // Compute dynamic obstacle point cloud at time t
+                    double t = node->coord[3];
+                    pcl::PointCloud<pcl::PointXYZ>::Ptr dyn_cloud_t(new pcl::PointCloud<pcl::PointXYZ>());
+                    for (const auto& dyn_pair : dynamic_points)
+                    {
+                        Eigen::Vector3d predicted_pos = dyn_pair.first + dyn_pair.second * t;
+                        dyn_cloud_t->points.emplace_back(predicted_pos[0], predicted_pos[1], predicted_pos[2]);
+                    }
+
+                    std::string cloud_id = "dyn_obs_t_" + std::to_string(cloud_idx);
+                    // pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> cloud_color(
+                    //     dyn_cloud_t,
+                    //     (cloud_idx * color_step) % 256,
+                    //     (128 + cloud_idx * color_step / 2) % 256,
+                    //     (255 - cloud_idx * color_step) % 256
+                    // );
+                    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> cloud_color(
+                        dyn_cloud_t,
+                        r,
+                        g,
+                        b
+                    );
+                    viewer->addPointCloud(dyn_cloud_t, cloud_color, cloud_id);
+                    viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, cloud_id);
+
+                    ++cloud_idx;
+                }
+                nodeList = rrt_dynamic.getTree();
+                pathList = rrt_dynamic.getPathList();
+                for (const auto& node : pathList)
+                {
+                    double t = node->coord[3];
+                    bool collision = !sfc_generator.isNodeCollisionFree(node, input_cloud, dynamic_points, t, node->radius);
+                    if (collision)
+                    {
+                        std::cout << "[Collision Detected] Node at time " << t << " with coord: " << node->coord.transpose() << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "[Collision sanity check] Node with coord: " << node->coord.transpose() <<" is collision free: "<< std::endl;
+
+                    }
+                }
+                // int i = 0;
+                // for(NodePtr_dynamic node : nodeList)
+                // {
+                //     if(node->preNode_ptr != NULL)
+                //     {
+                //         pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]); // parent point 
+                //         pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]); // child point 
+
+                //         // Add a line between the two points
+                //         viewer->addLine(point1, point2, 1.0, 0.0, 0.0, "line"+std::to_string(i++));
+                //     }
+                // }
+            }
+            else
+            {
+                nodeList = rrt_dynamic.getTree();
+                int i = 0;
+                for(NodePtr_dynamic node : nodeList)
+                {
+                    if(node->preNode_ptr != NULL)
+                    {
+                        pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]); // parent point 
+                        pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]); // child point 
+
+                        // Add a line between the two points
+                        viewer->addLine(point1, point2, 1.0, 0.0, 0.0, "line"+std::to_string(i++));
+                    }
+                }
+            }
+
+            // std::cout<<"[path debug] number of nodes after refine and evaluation: "<<nodeList.size()<<std::endl;
+            std::cout<<"[path debug] path exist status: "<<rrt_dynamic.getPathExistStatus()<<std::endl;
+            viewer->addPointCloud(input_cloud, "original_pcd");
+            // Optional: Set camera parameters and color
+            viewer->setBackgroundColor(1.0, 1.0, 1.0);
+            viewer->addCoordinateSystem(1.0);
+            viewer->setRepresentationToWireframeForAllActors();
+
+            viewer->spin();
+        }
+        else
         {
-            pcl::PointXYZRGBA point_rgba;
-            point_rgba.x = path_rrt_mmd(i,0);
-            point_rgba.y = path_rrt_mmd(i,1);
-            point_rgba.z = path_rrt_mmd(i,2);
+            std::vector<NodePtr_dynamic> nodeList = rrt_dynamic.getTree();
+            std::cout<<"[no path debug] size of nodelist: "<<nodeList.size()<<std::endl;
+            std::cout<<"[path exist debug] number of dynamic points: "<<dynamic_points.size()<<std::endl;
+
+            auto ptr = nodeList[0];
+            std::cout<<"[no path debug] ptr params"<<ptr->coord.transpose()<<" : "<<ptr->radius<<std::endl;
+            pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Point cloud visualization"));
+            int i = 0;
+            for(NodePtr_dynamic node : nodeList)
+            {
+                if(node->preNode_ptr != NULL)
+                {
+                    pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]); // parent point 
+                    pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]); // child point 
+
+                    // Add a line between the two points
+                    viewer->addLine(point1, point2, 1.0, 0.0, 0.0, "line"+std::to_string(i++));
+                }
+            }
             
-            // Set the color fields, here we initialize them to a default value
-            point_rgba.r = 0; // Red channel
-            point_rgba.g = 255; // Green channel
-            point_rgba.b = 0; // Blue channel
-            point_rgba.a = 100; // Alpha channel
-            // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-            // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-            path_mmd->points.push_back(point_rgba);
+            viewer->addPointCloud(input_cloud, "original_pcd");
+            // Optional: Set camera parameters and color
+            viewer->setBackgroundColor(0.0, 0.0, 0.0);
+            viewer->addCoordinateSystem(1.0);
+            viewer->setRepresentationToWireframeForAllActors();
+
+            // while (!viewer->wasStopped()) {
+            //     viewer->spinOnce(100);
+            // }
+            viewer->spin();
         }
-
-        for(int i=0; i<int(path_rrt_gaus.rows()); i++)
-        {
-            pcl::PointXYZRGBA point_rgba;
-            point_rgba.x = path_rrt_gaus(i,0);
-            point_rgba.y = path_rrt_gaus(i,1);
-            point_rgba.z = path_rrt_gaus(i,2);
-            
-            // Set the color fields, here we initialize them to a default value
-            point_rgba.r = 0; // Red channel
-            point_rgba.g = 0; // Green channel
-            point_rgba.b = 255; // Blue channel
-            point_rgba.a = 100; // Alpha channel
-            // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-            // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-            path_gaus->points.push_back(point_rgba);
-        }
-
-        viewer_temp->addPointCloud(path_rrt_og, "rrt_og");
-        viewer_temp->addPointCloud(path_mmd, "rrt_mmd");
-        viewer_temp->addPointCloud(path_gaus, "rrt_gaus");
-
-        viewer_temp->addPointCloud(input_cloud, "pcd");
-        viewer_temp->setBackgroundColor(0.0, 0.0, 0.0);
-        viewer_temp->addCoordinateSystem(1.0);
-        viewer_temp->setRepresentationToWireframeForAllActors();
-        viewer_temp->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, "pcd");
-        viewer_temp->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "rrt_og");
-        viewer_temp->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "rrt_mmd");
-        viewer_temp->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "rrt_gaus");
-
-        while (!viewer_temp->wasStopped()) {
-            viewer_temp->spinOnce(100);
-        }
-
     }
-*/
-    
-
-    bool ciri_testing = true;
     if(ciri_testing)
     {
         _uav_size = 0.2;
@@ -1067,9 +1497,7 @@ int main(int argc, char** argv)
         a[1] = 0.0;
         a[2] = 1.0;
 
-        b[0] = 4.5;
-        b[1] = 0.0;
-        b[2] = 1.0;
+        b = a;
 
         Eigen::Vector3d min_pt{-9.0, -9.0, -9.0};
         Eigen::Vector3d max_pt{9.0, 9.0, 9.0};
@@ -1165,474 +1593,328 @@ int main(int argc, char** argv)
         viewer->addCoordinateSystem(1.0);
         viewer->setRepresentationToWireframeForAllActors();
 
-        while (!viewer->wasStopped()) {
-            viewer->spinOnce(100);
-        }
+        viewer->spin();
     }
-    else
+    else if(testing_cont)
     {
         if(path_exist)
-    {
-        Eigen::MatrixXd path_rrt = path_radius_pair.first;
-        // Eigen::MatrixXd path_rrt_mmd = path_radius_pair_mmd.first;
-
-        Eigen::MatrixXd path_skeleton = path_rrt;
-        Eigen::VectorXd radius_rrt = path_radius_pair.second;
-        // Eigen::VectorXd radius_rrt_mmd = path_radius_pair_mmd.second;
-        Eigen::VectorXd radius_skeleton = radius_rrt;
-        Eigen::MatrixXd corridor_skeleton;
-        int num_points = path_rrt.rows();
-        std::random_device rd;  // Seed for the random number engine
-        std::mt19937 gen(rd()); // Mersenne Twister random number generator
-        double rho1 = 0.99;
-        double rho2 = 1-rho1;
-        
-        /*
-        for(int i=1; i<num_points; i++)
         {
-            Eigen::Vector3d path_point(path_skeleton(i,0), path_skeleton(i,1), path_skeleton(i,2));
-            Eigen::Vector3d anchor_point(path_skeleton(i-1,0), path_skeleton(i-1,1), path_skeleton(i-1,2));
-            double r1 = radius_skeleton(i-1);
-            double r2 = radius_skeleton(i);
-            double d = (path_point - anchor_point).norm();
-            double phi_x = 2*r2;
-            double phi_y = 50*phi_x;
-            double phi_z = 50*phi_x;
-            Eigen::Vector3d best_radius_vec;
-            double h1 = (r1 * r1 - r2 * r2 + d * d) / (2 * d);
-            double rc = sqrt(r1 * r1 - h1 * h1);
-            double best_score = rho1*r2 + rho2*rc;
-            std::normal_distribution<> dist_x(anchor_point[0], sqrt(phi_x));
-            std::normal_distribution<> dist_y(anchor_point[1], sqrt(phi_y));
-            std::normal_distribution<> dist_z(anchor_point[0], sqrt(phi_z));
+            Eigen::MatrixXd path_rrt = path_radius_pair.first;
+            // Eigen::MatrixXd path_rrt_mmd = path_radius_pair_mmd.first;
+            Eigen::MatrixXd path_skeleton = path_rrt;
+            Eigen::VectorXd radius_rrt = path_radius_pair.second;
+            // Eigen::VectorXd radius_rrt_mmd = path_radius_pair_mmd.second;
+            Eigen::VectorXd radius_skeleton = radius_rrt;
+            Eigen::MatrixXd corridor_skeleton;
+            int num_points = path_rrt.rows();
+            std::random_device rd;  // Seed for the random number engine
+            std::mt19937 gen(rd()); // Mersenne Twister random number generator
+            double rho1 = 0.99;
+            double rho2 = 1-rho1;
 
-            for(int j=0; j < 1000; j++)
-            {
-                Eigen::Vector3d sample(dist_x(gen), dist_x(gen), dist_x(gen));
-                
-                double r3 = rrt_path_gen.radiusSearch(sample);
-                double dn = (sample - anchor_point).norm();
+            std::vector<Eigen::MatrixX4d> hpolys;
+            std::vector<Eigen::MatrixX4d> hpolys_parallel;
+            std::vector<Eigen::MatrixX3d> tangentObstacles;
+            Eigen::Vector3d min_pt(x_l, y_l, z_l);
+            Eigen::Vector3d max_pt(x_h, y_h, z_h);
+            std::vector<NodePtr_dynamic> nodelist = rrt_dynamic.getTree();
+            std::cout<<"nodelist size: "<<nodelist.size()<<std::endl;
+            float progress = _max_radius;
+            std::vector<Eigen::Vector3d> eigen_points;
 
-                double hn = (r1 * r1 - r3 * r3 + dn * dn) / (2 * dn);
-                double rcn = sqrt(r1 * r1 - hn * hn);
-                double score = rho1*r3 + rho2*rcn;
-                if(r3 < _max_radius) continue;
-                if(score > best_score)
-                {
-                    best_score = score;
-                    path_skeleton(i,0) = sample[0];
-                    path_skeleton(i,1) = sample[1];
-                    path_skeleton(i,2) = sample[2];
-                    std::cout<<"score updated for "<<i<<" old radius: "<<radius_skeleton[i]<<" new radius "<<r3<<std::endl;
-
-                    radius_skeleton[i] = r3;
-                }
-            }
-
-        }
-*/
-
-
-        std::vector<Eigen::MatrixX4d> hpolys;
-        std::vector<Eigen::MatrixX4d> hpolys_parallel;
-        std::vector<Eigen::MatrixX3d> tangentObstacles;
-        Eigen::Vector3d min_pt(x_l, y_l, z_l);
-        Eigen::Vector3d max_pt(x_h, y_h, z_h);
-        std::vector<NodePtr> nodelist = rrt_path_gen.getTree();
-        std::cout<<"nodelist size: "<<nodelist.size()<<std::endl;
-        float progress = _max_radius;
-        std::vector<Eigen::Vector3d> eigen_points;
-
-        for (const auto& point : filtered_cloud->points)
-        {
-            Eigen::Vector3d eigen_point(point.x, point.y, point.z);
-            eigen_points.push_back(eigen_point);
-        }
-        // V_map.getSurf(eigen_points);
-        std::vector<Eigen::MatrixX4d> CIRI_hpolys;
-        std::vector<Eigen::MatrixX4d> CIRI_hpolys_deterministic;
-        auto time_bef_firi = std::chrono::steady_clock::now();
-        std::vector<geometry_utils::Ellipsoid> tangent_obs;
-        sfc_generator.convexCover(path_rrt, eigen_points, min_pt, max_pt, 1.0, 1.0, hpolys, tangentObstacles);
-        auto time_aft_firi = std::chrono::steady_clock::now();
-
-        auto elapsed_firi = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_firi - time_bef_firi).count()*0.001;
-
-        Eigen::Vector3d o{0.0, 0.0, 0.0};
-        auto time_bef_ciri = std::chrono::steady_clock::now();
-
-        sfc_generator.convexCoverCIRI(path_rrt, eigen_points, min_pt, max_pt, 1.5, _uav_size, CIRI_hpolys, o, tangent_obs, true);
-        auto time_aft_ciri = std::chrono::steady_clock::now();
-
-        auto elapsed_ciri = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_ciri - time_bef_ciri).count()*0.001;
-
-        // sfc_generator.convexCoverCIRI(path_rrt, eigen_points, min_pt, max_pt, 1.5, _uav_size, CIRI_hpolys_deterministic, o, tangent_obs, false);
-        if(hpolys.size() != tangentObstacles.size())
-        {
-            std::cout<<"[mmd debug] something is wrong"<<hpolys.size()<<" : "<<tangentObstacles.size()<<std::endl;   
-        }
-        else
-        {
-            for(int i=0; i<hpolys.size(); i++)
-            {
-                if(hpolys[i].rows() != tangentObstacles[i].rows()) std::cout<<"[mmd debug] if2 something is wrong"<<std::endl;
-            }
-        }
-        // sfc_generator.shortCut(hpolys);
-        
-        // auto time_bef_firi_parallel = std::chrono::steady_clock::now();
-        // sfc_generator.convexCoverParallel(path_rrt, eigen_points, min_pt, max_pt, 1.0, 1.0, hpolys_parallel);
-        // // sfc_generator.shortCut(hpolys_parallel);
-        auto time_aft_firi_parallel = std::chrono::steady_clock::now();
-        // auto elapsed_firi_parallel = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_firi_parallel - time_bef_firi_parallel).count()*0.001;
-
-        gcopter::GCOPTER_PolytopeSFC gCopter;
-        Eigen::Vector3d front = a;
-        int n = path_skeleton.rows();
-
-        Eigen::Vector3d back = b;
-        std::vector<Eigen::MatrixX3d> t_obs = tangentObstacles;
-        std::vector<std::vector<float>> trust_vector;
-        for(int i = 0; i<tangentObstacles.size(); i++)
-        {
-            std::vector<float> temp_vec;
-            for(int j=0; j<tangentObstacles[i].rows(); j++)
-            {
-                if(tangentObstacles[i](j, 0) != INFINITY && tangentObstacles[i](j, 1) != INFINITY && tangentObstacles[i](j, 2) != INFINITY )
-                {
-                    double distance = sqrt(pow(tangentObstacles[i](j, 0), 2) + pow(tangentObstacles[i](j, 1), 2) + pow(tangentObstacles[i](j, 2), 2));
-                    double sigma = 0.001063 + 0.0007278 * distance + 
-                   0.003949 * distance * distance + 
-                   0.022 * pow(distance, 1.5);
-
-                    tangentObstacles[i](j, 0) = 0.04;
-                    tangentObstacles[i](j, 1) = 0.04;
-                    tangentObstacles[i](j, 2) = sigma;
-
-                    Eigen::Vector3d tangentRow = tangentObstacles[i].row(j);
-                    Eigen::Vector4d hpolyRow = hpolys[i].row(j); // 4D vector
-
-                    // Compute dot product using only the first 3 elements of hpolyRow
-                    double dot_product = tangentRow.dot(hpolyRow.head<3>());
-                                    double norm_tangent = tangentRow.norm();
-                    double norm_hpoly = hpolyRow.head<3>().norm();
-
-                    // Compute normalized dot product (cosine similarity)
-                    double normalized_dot_product = 0.0;
-                    if (norm_tangent > 1e-6 && norm_hpoly > 1e-6) // Avoid division by zero
-                    {
-                        normalized_dot_product = abs(dot_product / (norm_tangent * norm_hpoly));
-                    }
-                    temp_vec.push_back((normalized_dot_product + 1)*_safety_margin);
-                }
-                else
-                {
-                    temp_vec.push_back(_safety_margin);
-                }
-            }
-            trust_vector.push_back(temp_vec);
-        }
-        // GCopter parameters
-        Eigen::Matrix3d iniState;
-        Eigen::Matrix3d finState;
-        iniState << front, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
-        finState << back, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
-        Eigen::VectorXd magnitudeBounds(5);
-        Eigen::VectorXd penaltyWeights(5);
-        Eigen::VectorXd physicalParams(6);
-        std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000};
-        magnitudeBounds(0) = 4.0;
-        magnitudeBounds(1) = 2.1;
-        magnitudeBounds(2) = 1.05;
-        magnitudeBounds(3) = 2.0;
-        magnitudeBounds(4) = 12.0;
-        penaltyWeights(0) = chiVec[0];
-        penaltyWeights(1) = chiVec[1];
-        penaltyWeights(2) = chiVec[2];
-        penaltyWeights(3) = chiVec[3];
-        penaltyWeights(4) = chiVec[4];
-        physicalParams(0) = 0.61;
-        physicalParams(1) = 9.8;
-        physicalParams(2) = 0.70;
-        physicalParams(3) = 0.80;
-        physicalParams(4) = 0.01;
-        physicalParams(5) = 0.0001;
-        int quadratureRes = 16;
-        float weightT = 20.0;
-        float smoothingEps = 0.01;
-        float relcostto1 = 1e-3;
-        traj.clear();
-        std::vector<Eigen::Vector3d> rrt_vec;
-        for(int i = 0; i<path_rrt.rows(); i++)
-        {
-            Eigen::Vector3d pt(path_rrt(i, 0), path_rrt(i, 1), path_rrt(i, 2));
-            rrt_vec.push_back(pt);
-        }
-        auto time_bef_gcopter = std::chrono::steady_clock::now();
-
-        if (!gCopter.setup(weightT, iniState, finState, hpolys, rrt_vec, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, trust_vector))
-        {
-            std::cout<<"gcopter returned false during setup"<<std::endl;
-        }
-        if (std::isinf(gCopter.optimize(traj, relcostto1)))
-        {
-            std::cout<<"gcopter optimization cost is infinity"<<std::endl;
-        }
-        auto time_aft_gcopter = std::chrono::steady_clock::now();
-
-        auto elapsed_gcopter = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_gcopter - time_bef_gcopter).count()*0.001;
-        std::cout<<" time in firi (in seconds): "<<elapsed_firi<<" time in gcopter (in seconds): "<<elapsed_gcopter<<" time in ciri (in seconds): "<<elapsed_ciri<<std::endl;
-        std::cout<<"hpolys size: "<<hpolys.size()<<std::endl;
-
-        if (traj.getPieceNum() > 0)
-        {
-            
-            pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Polytope Visualization"));
-            pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
-            std::vector<pcl::Vertices> polygons;
-
-            for (const auto &hPoly : CIRI_hpolys) {
-                Eigen::Matrix<double, 3, -1, Eigen::ColMajor> vPoly;
-                geo_utils::enumerateVs(hPoly, vPoly);
-
-                quickhull::QuickHull<double> tinyQH;
-                const auto polyHull = tinyQH.getConvexHull(vPoly.data(), vPoly.cols(), false, true);
-                const auto &idxBuffer = polyHull.getIndexBuffer();
-
-                // Add vertices to PCL PointCloud with RGB color
-                int baseIndex = cloud->size();
-                for (int i = 0; i < vPoly.cols(); ++i) {
-                    pcl::PointXYZRGB point;
-                    point.x = vPoly(0, i);
-                    point.y = vPoly(1, i);
-                    point.z = vPoly(2, i);
-                    // Assign a color to the point (e.g., red)
-                    point.r = 255;
-                    point.g = 0;
-                    point.b = 0;
-                    cloud->push_back(point);
-                }
-
-                // Add triangles to PCL PolygonMesh
-                for (size_t i = 0; i < idxBuffer.size(); i += 3) {
-                    pcl::Vertices triangle;
-                    triangle.vertices.push_back(baseIndex + idxBuffer[i]);
-                    triangle.vertices.push_back(baseIndex + idxBuffer[i + 1]);
-                    triangle.vertices.push_back(baseIndex + idxBuffer[i + 2]);
-                    polygons.push_back(triangle);
-                }
-            }
-
-            // Convert to PolygonMesh
-            pcl::PolygonMesh polyMesh;
-            pcl::toPCLPointCloud2(*cloud, polyMesh.cloud);
-            polyMesh.polygons = polygons;
-            viewer->addPolygonMesh(polyMesh, "polytope_mesh_ciri_uncertain");
-            std::cout<<"ciri hpolys size: "<<CIRI_hpolys.size()<<std::endl;
-            // pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud2(new pcl::PointCloud<pcl::PointXYZRGB>());
-            // std::vector<pcl::Vertices> polygons2;
-
-            // for (const auto &hPoly : CIRI_hpolys_deterministic) 
-            // {
-            //     Eigen::Matrix<double, 3, -1, Eigen::ColMajor> vPoly;
-            //     geo_utils::enumerateVs(hPoly, vPoly);
-
-            //     quickhull::QuickHull<double> tinyQH;
-            //     const auto polyHull = tinyQH.getConvexHull(vPoly.data(), vPoly.cols(), false, true);
-            //     const auto &idxBuffer = polyHull.getIndexBuffer();
-
-            //     // Add vertices to PCL PointCloud with RGB color
-            //     int baseIndex = cloud2->size();
-            //     for (int i = 0; i < vPoly.cols(); ++i) {
-            //         pcl::PointXYZRGB point;
-            //         point.x = vPoly(0, i);
-            //         point.y = vPoly(1, i);
-            //         point.z = vPoly(2, i);
-            //         // Assign a color to the point (e.g., red)
-            //         point.r = 0;
-            //         point.g = 255;
-            //         point.b = 0;
-            //         cloud2->push_back(point);
-            //     }
-
-            //     // Add triangles to PCL PolygonMesh
-            //     for (size_t i = 0; i < idxBuffer.size(); i += 3) {
-            //         pcl::Vertices triangle;
-            //         triangle.vertices.push_back(baseIndex + idxBuffer[i]);
-            //         triangle.vertices.push_back(baseIndex + idxBuffer[i + 1]);
-            //         triangle.vertices.push_back(baseIndex + idxBuffer[i + 2]);
-            //         polygons2.push_back(triangle);
-            //     }
-            // }
-
-            // // Convert to PolygonMesh
-            // pcl::PolygonMesh polyMesh2;
-            // pcl::toPCLPointCloud2(*cloud2, polyMesh2.cloud);
-            // polyMesh2.polygons = polygons2;
-            // viewer->addPolygonMesh(polyMesh2, "polytope_mesh_ciri_deterministic");
-
-
-
-            sfc_generator.visualizePolytopePCL(viewer, hpolys, filtered_cloud, path_rrt, nodelist, traj);
-            // sfc_generator.visualizePolytopePCL(viewer, hpolys, input_cloud, path_rrt, nodelist, traj);
-            int n = hpolys.size();
-            
-            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr neighbour_pcd(new pcl::PointCloud<pcl::PointXYZRGBA>);
-
-            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tangent_obstacles(new pcl::PointCloud<pcl::PointXYZRGBA>);
-            for(int i=0; i<int(t_obs.size()); i++)
-            {
-                auto tangentMat = t_obs[i];
-                for(int j = 0; int(j<tangentMat.rows()); j++)
-                {
-                
-                    pcl::PointXYZRGBA point_rgba;
-                    if(tangentMat(j, 0) != INFINITY && tangentMat(j, 1) != INFINITY && tangentMat(j, 2) != INFINITY )
-                    {
-                        point_rgba.x = tangentMat(j,0);
-                        point_rgba.y = tangentMat(j,1);
-                        point_rgba.z = tangentMat(j,2);
-                        
-                        // Set the color fields, here we initialize them to a default value
-                        point_rgba.r = 255; // Red channel
-                        point_rgba.g = 0; // Green channel
-                        point_rgba.b = 0; // Blue channel
-                        point_rgba.a = 100; // Alpha channel
-                    }
-                    // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-                    // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-                    tangent_obstacles->points.push_back(point_rgba);
-                }
-            }
-
-
-            
-            // for(int i=0; i<path_rrt.rows(); i++)
-            // {
-            //     Eigen::Vector3d path_pt(path_rrt(i,0), path_rrt(i,1), path_rrt(i,2));
-            //     int c = 0;
-            //     for(int j = 0; j<n; j++)
-            //     {
-            //         if(geo_utils::checkInterior(hpolys[j], path_pt))
-            //         {
-            //             c+=1;
-            //         }
-            //     }
-            //     std::cout<<" number of polygons in which "<<path_pt.transpose()<<" lies = "<<c<<std::endl;
-            // }  
-            std::vector<Eigen::Vector3d> deepPoints;
-            for(int j = 0; j < n-1; j++)
-            {
-                auto poly1 = hpolys[j];
-                auto poly2 = hpolys[j+1];
-                Eigen::Vector3d potential_pt;
-                if(geo_utils::findDeepestPointOverlap(poly1, poly2, potential_pt))
-                {
-                    deepPoints.push_back(potential_pt);
-                }
-            }
-            std::cout<<"[gcopter debug] number of deep points: "<<deepPoints.size()<<" hpolys size: "<<n<<std::endl;
-            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_skeleton_pcd(new pcl::PointCloud<pcl::PointXYZRGBA>);
-            // std::cout<<"[mmd debug] path size for mmd: "<<path_rrt_mmd.rows()<<std::endl;
-            for(int i=0; i<int(deepPoints.size()); i++)
-            {
-                pcl::PointXYZRGBA point_rgba;
-                point_rgba.x = deepPoints[i].x();
-                point_rgba.y = deepPoints[i].y();
-                point_rgba.z = deepPoints[i].z();
-                
-                // Set the color fields, here we initialize them to a default value
-                point_rgba.r = 255; // Red channel
-                point_rgba.g = 0; // Green channel
-                point_rgba.b = 0; // Blue channel
-                point_rgba.a = 100; // Alpha channel
-                // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-                // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-                path_skeleton_pcd->points.push_back(point_rgba);
-            }
-            auto shortPath = gCopter.getShortPath();
-            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr gcopter_short_path(new pcl::PointCloud<pcl::PointXYZRGBA>);
-            
-            for(int i=0; i<int(shortPath.cols()); i++)
-            {
-                pcl::PointXYZRGBA point_rgba;
-                point_rgba.x = shortPath(0, i);
-                point_rgba.y = shortPath(1, i);
-                point_rgba.z = shortPath(2, i);
-                
-                // Set the color fields, here we initialize them to a default value
-                point_rgba.r = 255; // Red channel
-                point_rgba.g = 165; // Green channel
-                point_rgba.b = 0; // Blue channel
-                point_rgba.a = 255; // Alpha channel
-                // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
-                // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
-                gcopter_short_path->points.push_back(point_rgba);
-            }
-            std::cout<<"[gcopter debug] number of rrt points: "<<path_rrt.rows()<<" number of gcopter short points: "<<shortPath.cols()<<std::endl;
+            // V_map.getSurf(eigen_points);
+            std::vector<Eigen::MatrixX4d> CIRI_hpolys;
+            std::vector<Eigen::MatrixX4d> CIRI_hpolys_deterministic;
+            std::vector<Eigen::Vector4d> corridor_points;
+            std::vector<double> corridor_time_stamps;
 
             for(int i = 0; i<path_rrt.rows(); i++)
             {
-                if(i >= deepPoints.size())
-                {
-                    std::cout<<i<<" th index rrt point not matching"<<std::endl;
-                }
-                else
-                {
-                    std::cout<<"rrt path point: "<<path_rrt(i,0)<<" "<<path_rrt(i,1)<<" "<<path_rrt(i,2)<<" deep point: "<<deepPoints[i].transpose()<<std::endl;
-                }
-            }
-            // viewer->addPointCloud(path_skeleton_pcd, "geoutils deep points");
-            // viewer->addPointCloud(gcopter_short_path, "gcopter init points");
-            viewer->addPointCloud(tangent_obstacles, "tangent_points");
-            // viewer->addPointCloud(neighbour_pcd,"neighbour_pcd");
-            viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "tangent_points");
-            // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "gcopter init points");
+                corridor_points.push_back(path_rrt.row(i));
+                corridor_time_stamps.push_back(path_rrt(i,3));
 
-            pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> single_color(input_cloud, 255, 0, 0); // RGB: Red
+            }
+            
+            std::vector<double> times;
+            sfc_generator.convexCoverCIRI_dynamic(*input_cloud, dynamic_points, corridor_points, min_pt, max_pt, 1.0, hpolys, 0.0, _uav_size, times);
+            Eigen::VectorXd time_vec_eig = Eigen::Map<Eigen::VectorXd>(times.data(), times.size());
+            std::vector<Eigen::Vector3d> rrt_vec;
+            for(int i = 0; i<path_rrt.rows(); i++)
+            {
+                Eigen::Vector3d pt(path_rrt(i, 0), path_rrt(i, 1), path_rrt(i, 2));
+                rrt_vec.push_back(pt);
+            }
+            for(auto ele : times)
+            {
+                std::cout<<"times elements: "<<ele<<std::endl;
+            }
+            
+            pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Polytope Visualization"));
+            // sfc_generator.visualizeCIRI_gradient(hpolys, viewer);
+            std::vector<NodePtr_dynamic> pathList = rrt_dynamic.getPathList();
+            const int NUM_COLOR_STEPS = 5;  // Number of distinct colors to cycle through
+            const int COLORS_PER_STEP = std::max(3, int(pathList.size() / NUM_COLOR_STEPS));
+            sfc_generator.visualizeTemporalCIRI(hpolys, corridor_time_stamps, viewer, "id:0");
+            // Define a set of distinct colors that will cycle
+
+            const std::vector<std::tuple<int, int, int>> color_palette = {
+                {255, 0, 0},  
+                {213, 42, 42},    
+                {171, 84, 84},      
+                {129, 126, 126},    
+                {87, 168, 168}       
+            };
+            auto applyGradient = [](int r, int g, int b, double factor) {
+                int nr = std::clamp(int(r * factor), 0, 255);
+                int ng = std::clamp(int(g * factor), 0, 255);
+                int nb = std::clamp(int(b * factor), 0, 255);
+                return std::make_tuple(nr, ng, nb);
+            };
+
+            int cloud_idx = 0;
+            int line_idx = 0;
+
+            std::cout << "[path debug] number of nodes after expansion: " << nodelist.size() << std::endl;
+
+            for (NodePtr_dynamic node : pathList)
+            {
+                // Choose base color depending on step
+                int color_index = (cloud_idx / COLORS_PER_STEP) % color_palette.size();
+                auto [r_base, g_base, b_base] = color_palette[color_index];
+
+                // Apply gradient within step
+                int step_offset = cloud_idx % COLORS_PER_STEP;
+                double gradient_factor = 0.5 + 0.5 * (double(step_offset) / std::max(1, COLORS_PER_STEP - 1));
+                auto [r, g, b] = applyGradient(r_base, g_base, b_base, gradient_factor);
+
+                // Normalize for addLine()
+                double r_norm = r / 255.0;
+                double g_norm = g / 255.0;
+                double b_norm = b / 255.0;
+
+                // Draw path edges
+                if (node->preNode_ptr != nullptr)
+                {
+                    pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]);
+                    pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]);
+                    viewer->addLine(point1, point2, r_norm, g_norm, b_norm, "line_path" + std::to_string(line_idx++));
+                }
+
+                // Visualize dynamic obstacles at this node's time
+                double t = node->coord[3];
+                pcl::PointCloud<pcl::PointXYZ>::Ptr dyn_cloud_t(new pcl::PointCloud<pcl::PointXYZ>());
+                for (const auto& dyn_pair : dynamic_points)
+                {
+                    Eigen::Vector3d predicted_pos = dyn_pair.first + dyn_pair.second * t;
+                    dyn_cloud_t->points.emplace_back(predicted_pos[0], predicted_pos[1], predicted_pos[2]);
+                }
+
+                std::string cloud_id = "dyn_obs_t_" + std::to_string(cloud_idx);
+                pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> cloud_color(dyn_cloud_t, r, g, b);
+                viewer->addPointCloud(dyn_cloud_t, cloud_color, cloud_id);
+                viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, cloud_id);
+
+                ++cloud_idx;
+            }
             viewer->addPointCloud(input_cloud, "original_pcd");
             viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "original_pcd");
 
+            // viewer->setBackgroundColor(0.0, 0.0, 0.0);
+            // viewer->addCoordinateSystem(1.0);
+            // viewer->setRepresentationToWireframeForAllActors();
+            // viewer->spin();
+
+            gcopter::GCOPTER_PolytopeSFC gCopter;
+            gcopter_fixed::GCOPTER_PolytopeSFC_FixedTime gcopter_fixedtime;
+            Eigen::Vector3d front = a;
+            int n = path_skeleton.rows();
+
+            Eigen::Vector3d back = b;
+            // GCopter parameters
+            Eigen::Matrix3d iniState;
+            Eigen::Matrix3d finState;
+            iniState << front, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+            finState << back, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+            Eigen::VectorXd magnitudeBounds(5);
+            Eigen::VectorXd penaltyWeights(5);
+            Eigen::VectorXd physicalParams(6);
+            std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000};
+            magnitudeBounds(0) = 1.0;
+            magnitudeBounds(1) = 2.1;
+            magnitudeBounds(2) = 1.05;
+            magnitudeBounds(3) = 2.0;
+            magnitudeBounds(4) = 30.0;
+            penaltyWeights(0) = chiVec[0];
+            penaltyWeights(1) = chiVec[1];
+            penaltyWeights(2) = chiVec[2];
+            penaltyWeights(3) = chiVec[3];
+            penaltyWeights(4) = chiVec[4];
+            physicalParams(0) = 0.61;
+            physicalParams(1) = 9.8;
+            physicalParams(2) = 0.70;
+            physicalParams(3) = 0.80;
+            physicalParams(4) = 0.01;
+            physicalParams(5) = 0.0001;
+            int quadratureRes = 16;
+            float weightT = 20.0;
+            float smoothingEps = 0.01;
+            float relcostto1 = 1e-8;
+            traj.clear();
+            traj_fixedtime.clear();
+            auto time_bef_gcopter = std::chrono::steady_clock::now();
+
+            if (!gcopter_fixedtime.setup(iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, time_vec_eig))
+            {
+                std::cout<<"gcopter returned false during setup"<<std::endl;
+            }
+            if (std::isinf(gcopter_fixedtime.optimize(traj_fixedtime, relcostto1)))
+            {
+                std::cout<<"gcopter optimization cost is infinity"<<std::endl;
+            }
+            auto time_aft_gcopter = std::chrono::steady_clock::now();
+
+            auto elapsed_gcopter = std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_gcopter - time_bef_gcopter).count()*0.001;
+            std::cout<<"hpolys size: "<<hpolys.size()<<std::endl;
+
+            if (traj_fixedtime.getPieceNum() > 0 ) // && traj_fixedtime.getPieceNum() > 0)
+            {
+                std::cout<<"traj.getDurations: "<<traj.getDurations()<<std::endl;
+
+                pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr traj_points(new pcl::PointCloud<pcl::PointXYZRGBA>());
+                double T = 0.01; // Sampling interval
+                Eigen::Vector3d lastX = traj_fixedtime.getPos(0.0);
+
+                for (double t = T; t < traj_fixedtime.getTotalDuration(); t += T) {
+                    Eigen::Vector3d X = traj_fixedtime.getPos(t);
+
+                    // Add the current point to the trajectory point cloud
+                    pcl::PointXYZRGBA point;
+                    point.x = X(0);
+                    point.y = X(1);
+                    point.z = X(2);
+                    point.r = 0;
+                    point.g = 255;
+                    point.b = 0;
+                    point.a = 255;
+                    traj_points->points.push_back(point);
+                }
+
+                /*
+                std::vector<Eigen::Vector3d> deepPoints;
+                for(int j = 0; j < n-1; j++)
+                {
+                    auto poly1 = hpolys[j];
+                    auto poly2 = hpolys[j+1];
+                    Eigen::Vector3d potential_pt;
+                    if(geo_utils::findDeepestPointOverlap(poly1, poly2, potential_pt))
+                    {
+                        deepPoints.push_back(potential_pt);
+                    }
+                }
+                std::cout<<"[gcopter debug] number of deep points: "<<deepPoints.size()<<" hpolys size: "<<n<<std::endl;
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr path_skeleton_pcd(new pcl::PointCloud<pcl::PointXYZRGBA>);
+                // std::cout<<"[mmd debug] path size for mmd: "<<path_rrt_mmd.rows()<<std::endl;
+                for(int i=0; i<int(deepPoints.size()); i++)
+                {
+                    pcl::PointXYZRGBA point_rgba;
+                    point_rgba.x = deepPoints[i].x();
+                    point_rgba.y = deepPoints[i].y();
+                    point_rgba.z = deepPoints[i].z();
+                    
+                    // Set the color fields, here we initialize them to a default value
+                    point_rgba.r = 255; // Red channel
+                    point_rgba.g = 0; // Green channel
+                    point_rgba.b = 0; // Blue channel
+                    point_rgba.a = 100; // Alpha channel
+                    // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
+                    // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
+                    path_skeleton_pcd->points.push_back(point_rgba);
+                }
+                auto shortPath = gcopter_fixedtime.getShortPath();
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr gcopter_short_path(new pcl::PointCloud<pcl::PointXYZRGBA>);
+                
+                for(int i=0; i<int(shortPath.cols()); i++)
+                {
+                    pcl::PointXYZRGBA point_rgba;
+                    point_rgba.x = shortPath(0, i);
+                    point_rgba.y = shortPath(1, i);
+                    point_rgba.z = shortPath(2, i);
+                    
+                    // Set the color fields, here we initialize them to a default value
+                    point_rgba.r = 255; // Red channel
+                    point_rgba.g = 165; // Green channel
+                    point_rgba.b = 0; // Blue channel
+                    point_rgba.a = 255; // Alpha channel
+                    // std::cout<<"sphere added to: "<<point_radius<<" coord: "<<Path_rrt(i,0)<<Path_rrt(i,1)<<Path_rrt(i,2)<<std::endl;
+                    // viewer->addSphere(point_rgba, point_radius, 0.0, 1.0, 0.0, std::to_string(i));  // Green spheres
+                    gcopter_short_path->points.push_back(point_rgba);
+                }
+                std::cout<<"[gcopter debug] number of rrt points: "<<path_rrt.rows()<<" number of gcopter short points: "<<shortPath.cols()<<std::endl;
+
+                for(int i = 0; i<path_rrt.rows(); i++)
+                {
+                    if(i >= deepPoints.size())
+                    {
+                        std::cout<<i<<" th index rrt point not matching"<<std::endl;
+                    }
+                    else
+                    {
+                        std::cout<<"rrt path point: "<<path_rrt(i,0)<<" "<<path_rrt(i,1)<<" "<<path_rrt(i,2)<<" deep point: "<<deepPoints[i].transpose()<<std::endl;
+                    }
+                }
+                */
+                
+                // viewer->addPointCloud(path_skeleton_pcd, "geoutils deep points");
+                // viewer->addPointCloud(gcopter_short_path, "gcopter init points");
+                // viewer->addPointCloud(neighbour_pcd,"neighbour_pcd");
+                // viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, "gcopter init points");
+                viewer->addPointCloud(traj_points, "trajectory_points_fixedtime");
+
+                // viewer->addPointCloud(input_cloud, "original_pcd");
+                viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "trajectory_points_fixedtime");
+
+                viewer->setBackgroundColor(1.0, 1.0, 1.0);
+                viewer->addCoordinateSystem(1.0);
+                // viewer->setRepresentationToWireframeForAllActors();
+
+                viewer->spin();
+            }
+        }
+        else
+        {
+            std::vector<NodePtr_dynamic> nodeList = rrt_dynamic.getTree();
+            std::cout<<"[no path debug] size of nodelist: "<<nodeList.size()<<std::endl;
+            auto ptr = nodeList[0];
+            std::cout<<"[no path debug] ptr params"<<ptr->coord.transpose()<<" : "<<ptr->radius<<std::endl;
+            pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Point cloud visualization"));
+            int i = 0;
+            for(NodePtr_dynamic node : nodeList)
+            {
+                if(node->preNode_ptr != NULL)
+                {
+                    pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]); // parent point 
+                    pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]); // child point 
+
+                    // Add a line between the two points
+                    viewer->addLine(point1, point2, 1.0, 0.0, 0.0, "line"+std::to_string(i++));
+                }
+            }
+            
+            viewer->addPointCloud(input_cloud, "original_pcd");
+            // Optional: Set camera parameters and color
             viewer->setBackgroundColor(0.0, 0.0, 0.0);
             viewer->addCoordinateSystem(1.0);
             viewer->setRepresentationToWireframeForAllActors();
 
-            while (!viewer->wasStopped()) {
-                viewer->spinOnce(100);
-            }
-            // sfc_generator.visualizePolytopePCL(hpolys, cloud_filtered, path_rrt, nodelist, new_traj);
+            // while (!viewer->wasStopped()) {
+            //     viewer->spinOnce(100);
+            // }
+            viewer->spin();
+
 
         }
-    }
-    else
-    {
-        std::vector<NodePtr> nodeList = rrt_path_gen.getTree();
-        std::cout<<"[no path debug] size of nodelist: "<<nodeList.size()<<std::endl;
-        pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("Point cloud visualization"));
-        int i = 0;
-        for(NodePtr node : nodeList)
-        {
-            if(node->preNode_ptr != NULL)
-            {
-                pcl::PointXYZ point1(node->preNode_ptr->coord[0], node->preNode_ptr->coord[1], node->preNode_ptr->coord[2]); // parent point 
-                pcl::PointXYZ point2(node->coord[0], node->coord[1], node->coord[2]); // child point 
 
-                // Add a line between the two points
-                viewer->addLine(point1, point2, 1.0, 0.0, 0.0, "line"+std::to_string(i++));
-            }
-        }
-        
-        viewer->addPointCloud(inflated_cloud, "original_pcd");
-        // Optional: Set camera parameters and color
-        viewer->setBackgroundColor(0.0, 0.0, 0.0);
-        viewer->addCoordinateSystem(1.0);
-        viewer->setRepresentationToWireframeForAllActors();
-
-        while (!viewer->wasStopped()) {
-            viewer->spinOnce(100);
-        }
-
-    }
     }
 
     

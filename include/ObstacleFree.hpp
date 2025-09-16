@@ -1,5 +1,6 @@
 #include "geo_utils.hpp"
 #include "firi.hpp"
+#include "gcopter_fixed.hpp"
 #include <deque>
 #include <memory>
 #include <Eigen/Eigen>
@@ -25,6 +26,7 @@
 #include "datatype.h"
 #include "trajectory.hpp"
 #include "ciri.h"
+#include "datatype_dynamic.h"
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/conversions.h>
 #include "../data_structure/base/polytope.h"
@@ -35,6 +37,8 @@ class ObstacleFree
 {
     public:
         pcl::PointCloud<pcl::PointXYZ>::Ptr loadCSVToPointCloud(const std::string &filename);
+        std::vector<Eigen::Matrix3d> loadCSVToBbox(const std::string &filename);
+        void pcd_segmentation(pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud, std::vector<Eigen::Matrix3d> bboxes, std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> &dynamic_points);
         pcl::PointCloud<pcl::PointXYZ>::Ptr addDepthDependentPoissonNoise(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, float noise_scaling_factor = 1.0f);
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr convert_pcd_to_rgbd(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_xyz, float r = 255, float g = 255, float b = 255, float a = 255);
         bool generateObstacleFreePolytopes(const Eigen::Vector3d &a, const Eigen::Vector3d &b,
@@ -46,11 +50,17 @@ class ObstacleFree
                         const double eps = 1.0e-6); // deprecated
         void findPointCloudLimits(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, Eigen::Vector3d &minpt, Eigen::Vector3d &maxpt);
         void visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &viewer, const std::vector<Eigen::MatrixX4d> &hPolys, pcl::PointCloud<pcl::PointXYZ>::Ptr &input_cloud, Eigen::MatrixXd &path, const std::vector<NodePtr> nodelist, const Trajectory<5> &traj);
+        void visualizePolytopePCL(pcl::visualization::PCLVisualizer::Ptr &viewer, const std::vector<Eigen::MatrixX4d> &hPolys, pcl::PointCloud<pcl::PointXYZ>::Ptr &input_cloud, Eigen::MatrixXd &Path_rrt, const std::vector<NodePtr_dynamic> nodelist, const Trajectory<5> &traj); 
         void pclToVoxelMap(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud,
                             voxel_map::VoxelMap &voxelMap,
                             double dilateRadius);
 
         void pointCloudInflation(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, pcl::PointCloud<pcl::PointXYZ>::Ptr inflated_pcd);
+        bool isNodeCollisionFree(NodePtr_dynamic node,
+                         const pcl::PointCloud<pcl::PointXYZ>::Ptr& static_cloud,
+                         const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& dynamic_points,
+                         double t,
+                         double safe_radius);
         void convexCover(const Eigen::MatrixXd &path, 
                         const std::vector<Eigen::Vector3d> &pcd,
                         const Eigen::Vector3d &lowCorner,
@@ -72,6 +82,36 @@ class ObstacleFree
                         std::vector<geometry_utils::Ellipsoid> &tangent_obs,
                         bool uncertanity,
                         const double eps  = 1.0e-6);
+        
+        void convexCoverCIRI_dynamic(pcl::PointCloud<pcl::PointXYZ> cloud_input, 
+                        std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points,
+                        const std::vector<Eigen::Vector4d> &path, 
+                        const Eigen::Vector3d &lowCorner,
+                        const Eigen::Vector3d &highCorner,
+                        const double &range,
+                        std::vector<Eigen::MatrixX4d> &hpolys,
+                        double PCDStart_time,
+                        double _uav_radius,
+                        std::vector<double> &time_vector_poly,
+                        const double eps = 1.0e-6);
+        
+        void convexCover_dynamic(pcl::PointCloud<pcl::PointXYZ> cloud_input, 
+                        std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points,
+                        const std::vector<Eigen::Vector4d> &path, 
+                        const Eigen::Vector3d &lowCorner,
+                        const Eigen::Vector3d &highCorner,
+                        const double &range,
+                        std::vector<Eigen::MatrixX4d> &hpolys,
+                        double PCDStart_time,
+                        double _uav_radius,
+                        Eigen::VectorXd &times,
+                        const double eps = 1.0e-6);
+
+        
+        Eigen::Matrix3Xd getObstaclePoints_continous(double &t1, double &t2, double pcd_start_time,
+                                                    pcl::PointCloud<pcl::PointXYZ> cloud_input, 
+                                                    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points, 
+                                                    Eigen::Matrix<double, 6, 4> &bd);
 
         std::vector<Eigen::MatrixX4d> convexCoverParallel(const Eigen::MatrixXd &path, 
                                         const std::vector<Eigen::Vector3d> &points,
@@ -87,7 +127,9 @@ class ObstacleFree
         inline void shortCut(std::vector<Eigen::MatrixX4d> &hpolys);
 
         void visualizeCIRI(std::vector<Eigen::MatrixX4d> &hpolys, pcl::visualization::PCLVisualizer::Ptr &viewer, int id = 0);
+        void visualizeCIRI_gradient(std::vector<Eigen::MatrixX4d> &hpolys, pcl::visualization::PCLVisualizer::Ptr &viewer);
         void visualizeObs(std::vector<geometry_utils::Ellipsoid> &tangent_obs, pcl::visualization::PCLVisualizer::Ptr &viewer, int id);
-
+        std::tuple<int, int, int> timeToColor(double time, double max_time = 10.0, bool use_gradient = true);
+        void visualizeTemporalCIRI(const std::vector<Eigen::MatrixX4d> &hpolys, const std::vector<double> &time_stamps, pcl::visualization::PCLVisualizer::Ptr &viewer, const std::string &base_name); 
 
 };

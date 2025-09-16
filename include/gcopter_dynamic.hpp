@@ -22,12 +22,12 @@
     SOFTWARE.
 */
 
-#ifndef GCOPTER_HPP
-#define GCOPTER_HPP
+#ifndef GCOPTER_DYNAMIC_HPP
+#define GCOPTER_DYNAMIC_HPP
 
 #include "minco.hpp"
 #include "flatness.hpp"
-#include "lbfgs.hpp"
+#include "lbfgs_bkup.hpp"
 
 #include <Eigen/Eigen>
 
@@ -35,12 +35,12 @@
 #include <cfloat>
 #include <iostream>
 #include <vector>
-#include <geo_utils.hpp>
+#include <rrt_path_finder/geo_utils.hpp>
 
-namespace gcopter
+namespace gcopter_dynamic
 {
 
-    class GCOPTER_PolytopeSFC
+    class GCOPTER_PolytopeSFC_Dynamic
     {
     public:
         typedef Eigen::Matrix3Xd PolyhedronV;
@@ -79,8 +79,11 @@ namespace gcopter
         double zero_cost;
         double allocSpeed;
 
-        lbfgs::lbfgs_parameter_t lbfgs_params;
-
+        lbfgs_bkup::lbfgs_parameter_t lbfgs_params;
+        std::vector<Eigen::Matrix3d> dynamic_obs_array;
+        double _startT;
+        double r_safe;
+        bool _is_bkup;
         Eigen::Matrix3Xd points;
         Eigen::VectorXd times;
         Eigen::Matrix3Xd gradByPoints;
@@ -204,7 +207,7 @@ namespace gcopter
             const int sizeP = P.cols();
 
             double minSqrD;
-            lbfgs::lbfgs_parameter_t tiny_nls_params;
+            lbfgs_bkup::lbfgs_parameter_t tiny_nls_params;
             tiny_nls_params.past = 0;
             tiny_nls_params.delta = 1.0e-5;
             tiny_nls_params.g_epsilon = FLT_EPSILON;
@@ -221,9 +224,9 @@ namespace gcopter
                 ovPoly.rightCols(k) = vPolys[l];
                 Eigen::VectorXd x(k);
                 x.setConstant(sqrt(1.0 / k));
-                lbfgs::lbfgs_optimize(x,
+                lbfgs_bkup::lbfgs_optimize(x,
                                       minSqrD,
-                                      &GCOPTER_PolytopeSFC::costTinyNLS,
+                                      &GCOPTER_PolytopeSFC_Dynamic::costTinyNLS,
                                       nullptr,
                                       nullptr,
                                       &ovPoly,
@@ -322,6 +325,21 @@ namespace gcopter
             }
         }
 
+        static inline Eigen::Vector3d closestBBoxPoint(const Eigen::Vector3d &bbox_center, double height, double length, double width, Eigen::Vector3d &query_pt)
+        {
+            double xmin = bbox_center[0] - width/2;
+            double xmax = bbox_center[0] + width/2;
+
+            double ymin = bbox_center[1] - height/2;
+            double ymax = bbox_center[1] + height/2;
+
+            double zmin = bbox_center[2] - length/2;
+            double zmax = bbox_center[2] + length/2;
+
+            Eigen::Vector3d closest_pt{std::min(std::max(query_pt[0], xmin), xmax), std::min(std::max(query_pt[1], ymin), ymax), std::min(std::max(query_pt[2], zmin), zmax)};
+            return closest_pt;
+        }
+
         static inline bool smoothedL1Corridor(const double &x,
                                       const double &mu,
                                       const double &b,
@@ -367,8 +385,14 @@ namespace gcopter
                                                    flatness::FlatnessMap &flatMap,
                                                    double &cost,
                                                    Eigen::VectorXd &gradT,
-                                                   Eigen::MatrixX3d &gradC)
+                                                   Eigen::MatrixX3d &gradC,
+                                                   std::vector<Eigen::Matrix3d> &obs_array,
+                                                   const double &start_time,
+                                                   const double &r_safe,
+                                                   const bool &is_bkup)
         {
+            // std::cout<<"[attach penalty function] debug 00: "<<std::endl;
+
             const double velSqrMax = magnitudeBounds(0) * magnitudeBounds(0);
             const double omgSqrMax = magnitudeBounds(1) * magnitudeBounds(1);
             const double thetaMax = magnitudeBounds(2);
@@ -381,6 +405,8 @@ namespace gcopter
             const double weightOmg = penaltyWeights(2);
             const double weightTheta = penaltyWeights(3);
             const double weightThrust = penaltyWeights(4);
+            const double weightDynObs = 500;
+            // std::cout<<"[attach penalty function] debug 01: "<<std::endl;
 
             Eigen::Vector3d pos, vel, acc, jer, sna;
             Eigen::Vector3d totalGradPos, totalGradVel, totalGradAcc, totalGradJer;
@@ -401,11 +427,14 @@ namespace gcopter
             double violaPosPenaD, violaVelPenaD, violaOmgPenaD, violaThetaPenaD, violaThrustPenaD;
             double violaPosPena, violaVelPena, violaOmgPena, violaThetaPena, violaThrustPena;
             double node, pena;
-
+            // std::cout<<"[attach penalty function] debug 02: "<<std::endl;
             const int pieceNum = T.size();
             const double integralFrac = 1.0 / integralResolution;
+            // std::cout<<"[attach penalty function] debug 03: "<<std::endl;
+
             for (int i = 0; i < pieceNum; i++)
             {
+                // std::cout<<"[attach penalty function] debug 1: "<<std::endl;
                 const Eigen::Matrix<double, 6, 3> &c = coeffs.block<6, 3>(i * 6, 0);
                 step = T(i) * integralFrac;
                 for (int j = 0; j <= integralResolution; j++)
@@ -425,8 +454,9 @@ namespace gcopter
                     acc = c.transpose() * beta2;
                     jer = c.transpose() * beta3;
                     sna = c.transpose() * beta4;
-
+                    // std::cout<<"[attach penalty function] debug 2: "<<std::endl;
                     flatMap.forward(vel, acc, jer, 0.0, 0.0, thr, quat, omg);
+                    // std::cout<<"[attach penalty function] debug 3: "<<std::endl;
 
                     violaVel = vel.squaredNorm() - velSqrMax;
                     violaOmg = omg.squaredNorm() - omgSqrMax;
@@ -441,6 +471,91 @@ namespace gcopter
 
                     L = hIdx(i);
                     K = hPolys[L].rows();
+                    // std::cout<<"[attach penalty function] debug 4: "<<std::endl;
+
+                    if(is_bkup)
+                    {
+                        double t_global = start_time + s1;   // current absolute time of this trajectory sample
+
+                        for (const auto &obs : obs_array)
+                        {
+                            Eigen::Vector3d obs_pos0 = obs.row(0);   // initial obstacle position
+                            Eigen::Vector3d obs_vel  = obs.row(1);   // obstacle velocity
+                            Eigen::Vector3d obs_size = obs.row(2).reverse();   // bounding box dimensions (H, W, L)
+
+                            // Predict obstacle center at current time
+                            Eigen::Vector3d ct_center = obs_pos0 + t_global * obs_vel;
+
+                            // Half-length of obstacle box
+                            Eigen::Vector3d half_len = 0.5 * obs_size;
+
+                            // Distance between UAV and obstacle center
+                            Eigen::Vector3d dist_vec = pos - ct_center;
+
+                            // Check vector: how far outside the bounding box the UAV is
+                            Eigen::Vector3d check_vec = dist_vec.cwiseAbs() - half_len;
+
+                            if ((check_vec.array() < 0.0).all())
+                            {
+                                // ================== Case A: Inside bounding box (hard penalty) ==================
+                                // Nearest point on obstacle surface
+                                Eigen::Vector3d axis(
+                                    dist_vec(0) > 0 ? ct_center(0) + half_len(0) : ct_center(0) - half_len(0),
+                                    dist_vec(1) > 0 ? ct_center(1) + half_len(1) : ct_center(1) - half_len(1),
+                                    dist_vec(2) > 0 ? ct_center(2) + half_len(2) : ct_center(2) - half_len(2));
+
+                                Eigen::Vector3d dist = pos - axis;
+
+                                // Quadratic penalty on penetration
+                                double dist_err2 = dist.squaredNorm();
+                                double pena_dyn = weightDynObs * dist_err2;
+
+                                // Gradient wrt UAV position
+                                Eigen::Vector3d gradPos_dyn = weightDynObs * 2.0 * dist;
+
+                                // Inject into trajectory cost
+                                pena += pena_dyn;
+                                gradPos += gradPos_dyn;
+                            }
+                            else
+                            {
+                                // ================== Case B: Near obstacle (ellipsoidal soft penalty) ==================
+                                // Ellipsoid axes = half box lengths
+                                double inv_x = 1.0 / (half_len(0) * half_len(0));
+                                double inv_y = 1.0 / (half_len(1) * half_len(1));
+                                double inv_z = 1.0 / (half_len(2) * half_len(2));
+
+                                // Ellipsoidal distance measure
+                                double ellip_dist2 =
+                                    dist_vec(0) * dist_vec(0) * inv_x +
+                                    dist_vec(1) * dist_vec(1) * inv_y +
+                                    dist_vec(2) * dist_vec(2) * inv_z;
+
+                                // If UAV is within "ellipsoidal safe margin"
+                                if (ellip_dist2 < 2.5)   // threshold radius (tunable)
+                                {
+                                    double dist_err = 2.5 - ellip_dist2;
+                                    double dist_err2 = dist_err * dist_err;
+                                    double dist_err3 = dist_err2 * dist_err;
+
+                                    double pena_dyn = weightDynObs * dist_err3;
+
+                                    // Gradient wrt UAV position
+                                    Eigen::Vector3d gradPos_dyn =
+                                        weightDynObs * 3.0 * dist_err2 * (-2.0) *
+                                        Eigen::Vector3d(inv_x * dist_vec(0),
+                                                        inv_y * dist_vec(1),
+                                                        inv_z * dist_vec(2));
+
+                                    // Inject into trajectory cost
+                                    pena += pena_dyn;
+                                    gradPos += gradPos_dyn;
+                                }
+                            }
+                        }
+                    }
+
+                    
                     for (int k = 0; k < K; k++)
                     {
                         outerNormal = hPolys[L].block<1, 3>(k, 0);
@@ -452,17 +567,21 @@ namespace gcopter
                         }
                     }
 
+                    // std::cout<<"[attach penalty function] debug 7: "<<std::endl;
+
                     if (smoothedL1(violaVel, smoothFactor, violaVelPena, violaVelPenaD))
                     {
                         gradVel += weightVel * violaVelPenaD * 2.0 * vel;
                         pena += weightVel * violaVelPena;
                     }
+                    // std::cout<<"[attach penalty function] debug 8: "<<std::endl;
 
                     if (smoothedL1(violaOmg, smoothFactor, violaOmgPena, violaOmgPenaD))
                     {
                         gradOmg += weightOmg * violaOmgPenaD * 2.0 * omg;
                         pena += weightOmg * violaOmgPena;
                     }
+                    // std::cout<<"[attach penalty function] debug 9: "<<std::endl;
 
                     if (smoothedL1(violaTheta, smoothFactor, violaThetaPena, violaThetaPenaD))
                     {
@@ -471,34 +590,39 @@ namespace gcopter
                                     Eigen::Vector4d(0.0, quat(1), quat(2), 0.0);
                         pena += weightTheta * violaThetaPena;
                     }
+                    // std::cout<<"[attach penalty function] debug 10: "<<std::endl;
 
                     if (smoothedL1(violaThrust, smoothFactor, violaThrustPena, violaThrustPenaD))
                     {
                         gradThr += weightThrust * violaThrustPenaD * 2.0 * (thr - thrustMean);
                         pena += weightThrust * violaThrustPena;
                     }
+                    // std::cout<<"[attach penalty function] debug 11: "<<std::endl;
 
                     flatMap.backward(gradPos, gradVel, gradThr, gradQuat, gradOmg,
                                      totalGradPos, totalGradVel, totalGradAcc, totalGradJer,
                                      totalGradPsi, totalGradPsiD);
+                    // std::cout<<"[attach penalty function] debug 12: "<<std::endl;
 
                     node = (j == 0 || j == integralResolution) ? 0.5 : 1.0;
                     alpha = j * integralFrac;
+                    // std::cout<<"[attach penalty function] debug 13: "<<std::endl;
                     gradC.block<6, 3>(i * 6, 0) += (beta0 * totalGradPos.transpose() +
                                                     beta1 * totalGradVel.transpose() +
                                                     beta2 * totalGradAcc.transpose() +
                                                     beta3 * totalGradJer.transpose()) *
                                                    node * step;
+                    // std::cout<<"[attach penalty function] debug 14: "<<std::endl;
                     gradT(i) += (totalGradPos.dot(vel) +
                                  totalGradVel.dot(acc) +
                                  totalGradAcc.dot(jer) +
                                  totalGradJer.dot(sna)) *
                                     alpha * node * step +
                                 node * integralFrac * pena;
+                    // std::cout<<"[attach penalty function] debug 15: "<<std::endl;
                     cost += node * step * pena;
                 }
             }
-
             return;
         }
 
@@ -506,7 +630,7 @@ namespace gcopter
                                             const Eigen::VectorXd &x,
                                             Eigen::VectorXd &g)
         {
-            GCOPTER_PolytopeSFC &obj = *(GCOPTER_PolytopeSFC *)ptr;
+            GCOPTER_PolytopeSFC_Dynamic &obj = *(GCOPTER_PolytopeSFC_Dynamic *)ptr;
             const int dimTau = obj.temporalDim;
             const int dimXi = obj.spatialDim;
             const double weightT = obj.rho;
@@ -514,28 +638,33 @@ namespace gcopter
             Eigen::Map<const Eigen::VectorXd> xi(x.data() + dimTau, dimXi);
             Eigen::Map<Eigen::VectorXd> gradTau(g.data(), dimTau);
             Eigen::Map<Eigen::VectorXd> gradXi(g.data() + dimTau, dimXi);
-
+            // std::cout<<"[dynamic gcopter] checking cost functional 1: "<<std::endl;
             forwardT(tau, obj.times);
             forwardP(xi, obj.vPolyIdx, obj.vPolytopes, obj.points);
+            // std::cout<<"[dynamic gcopter] checking cost functional 10: "<<std::endl;
 
             double cost;
             obj.minco.setParameters(obj.points, obj.times);
             obj.minco.getEnergy(cost);
             obj.minco.getEnergyPartialGradByCoeffs(obj.partialGradByCoeffs);
             obj.minco.getEnergyPartialGradByTimes(obj.partialGradByTimes);
+            // std::cout<<"[dynamic gcopter] checking cost functional 11: "<<std::endl;
 
             attachPenaltyFunctional(obj.times, obj.minco.getCoeffs(),
                                     obj.hPolyIdx, obj.hPolytopes,
                                     obj.smoothEps, obj.safety_margin, 
                                     obj.zero_cost, obj.integralRes,
                                     obj.magnitudeBd, obj.penaltyWt, obj.flatmap,
-                                    cost, obj.partialGradByTimes, obj.partialGradByCoeffs);
+                                    cost, obj.partialGradByTimes, obj.partialGradByCoeffs, obj.dynamic_obs_array, obj._startT, obj.r_safe, obj._is_bkup);
+            // std::cout<<"[dynamic gcopter] checking cost functional 12: "<<std::endl;
 
             obj.minco.propogateGrad(obj.partialGradByCoeffs, obj.partialGradByTimes,
                                     obj.gradByPoints, obj.gradByTimes);
+            // std::cout<<"[dynamic gcopter] checking cost functional 13: "<<std::endl;
 
             cost += weightT * obj.times.sum();
             obj.gradByTimes.array() += weightT;
+            // std::cout<<"[dynamic gcopter] checking cost functional 2: "<<std::endl;
 
             backwardGradT(tau, obj.gradByTimes, gradTau);
             backwardGradP(xi, obj.vPolyIdx, obj.vPolytopes, obj.gradByPoints, gradXi);
@@ -646,14 +775,14 @@ namespace gcopter
             dataPtrs[1] = (void *)(&ini);
             dataPtrs[2] = (void *)(&fin);
             dataPtrs[3] = (void *)(&vPolys);
-            lbfgs::lbfgs_parameter_t shortest_path_params;
+            lbfgs_bkup::lbfgs_parameter_t shortest_path_params;
             shortest_path_params.past = 3;
             shortest_path_params.delta = 1.0e-3;
             shortest_path_params.g_epsilon = 1.0e-5;
 
-            lbfgs::lbfgs_optimize(xi,
+            lbfgs_bkup::lbfgs_optimize(xi,
                                   minDistance,
-                                  &GCOPTER_PolytopeSFC::costDistance,
+                                  &GCOPTER_PolytopeSFC_Dynamic::costDistance,
                                   nullptr,
                                   nullptr,
                                   dataPtrs,
@@ -760,6 +889,14 @@ namespace gcopter
         // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
         // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
         //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
+
+        inline void setDynamicObstacles(std::vector<Eigen::Matrix3d> dynamic_array, double start_time, double rsafe)
+        {
+            dynamic_obs_array = dynamic_array;
+            _startT = start_time;
+            r_safe = rsafe;
+        }
+
         inline bool setup(const double &timeWeight,
                           const Eigen::Matrix3d &initialPVA,
                           const Eigen::Matrix3d &terminalPVA,
@@ -769,12 +906,13 @@ namespace gcopter
                           const int &integralResolution,
                           const Eigen::VectorXd &magnitudeBounds,
                           const Eigen::VectorXd &penaltyWeights,
-                          const Eigen::VectorXd &physicalParams)
+                          const Eigen::VectorXd &physicalParams,
+                          const bool &bkup)
         {
             rho = timeWeight;
             headPVA = initialPVA;
             tailPVA = terminalPVA;
-
+            _is_bkup = bkup;
             hPolytopes = safeCorridor;
             for (size_t i = 0; i < hPolytopes.size(); i++)
             {
@@ -835,42 +973,43 @@ namespace gcopter
             gradByTimes.resize(pieceN);
             partialGradByCoeffs.resize(6 * pieceN, 3);
             partialGradByTimes.resize(pieceN);
-
+            //std::cout << "polyN: " << polyN << std::endl;
+            //std::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
+            //std::cout << "pieceN: " << pieceN << std::endl;
             return true;
         }
 
         inline double optimize(Trajectory<5> &traj,
                                const double &relCostTol)
         {
-            std::cout<<"c1"<<std::endl;
+
             Eigen::VectorXd x(temporalDim + spatialDim);
-            std::cout<<"c2"<<std::endl;
+            //std::cout << "spatialDim: " << spatialDim << std::endl;
+            //std::cout << "temporalDim: " << temporalDim << std::endl;
+            //std::cout << "x.size(): " << x.size() << std::endl;
             Eigen::Map<Eigen::VectorXd> tau(x.data(), temporalDim);
-            std::cout<<"c3"<<std::endl;
             Eigen::Map<Eigen::VectorXd> xi(x.data() + temporalDim, spatialDim);
-            std::cout<<"c4"<<std::endl;
+            //std::cout << "check 1"<<std::endl;
             setInitial(shortPath, allocSpeed, pieceIdx, points, times);
             backwardT(times, tau);
             backwardP(points, vPolyIdx, vPolytopes, xi);
-            std::cout<<"c5"<<std::endl;
+
             double minCostFunctional;
             lbfgs_params.mem_size = 16;
             lbfgs_params.past = 3;
             lbfgs_params.min_step = 1.0e-32;
             lbfgs_params.g_epsilon = 0.0;
             lbfgs_params.delta = relCostTol;
-            std::cout<<"c6"<<std::endl;
-            int ret = lbfgs::lbfgs_optimize(x,
+            //std::cout << "check 2"<<std::endl;
+            int ret = lbfgs_bkup::lbfgs_optimize(x,
                                             minCostFunctional,
-                                            &GCOPTER_PolytopeSFC::costFunctional,
+                                            &GCOPTER_PolytopeSFC_Dynamic::costFunctional,
                                             nullptr,
                                             nullptr,
                                             this,
                                             lbfgs_params);
-            std::cout<<"c7"<<std::endl;
             if (ret >= 0)
             {
-                std::cout<<"c8"<<std::endl;
                 forwardT(tau, times);
                 forwardP(xi, vPolyIdx, vPolytopes, points);
                 minco.setParameters(points, times);
@@ -878,14 +1017,13 @@ namespace gcopter
             }
             else
             {
-                std::cout<<"c9"<<std::endl;
                 traj.clear();
                 minCostFunctional = INFINITY;
                 std::cout << "Optimization Failed: "
-                          << lbfgs::lbfgs_strerror(ret)
+                          << lbfgs_bkup::lbfgs_strerror(ret)
                           << std::endl;
             }
-            std::cout<<"c10"<<std::endl;
+            //std::cout << "check 3"<<std::endl;
             return minCostFunctional;
         }
         Eigen::Matrix3Xd getShortPath()

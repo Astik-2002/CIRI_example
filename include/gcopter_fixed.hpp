@@ -1,29 +1,5 @@
-/*
-    MIT License
-
-    Copyright (c) 2021 Zhepei Wang (wangzhepei@live.com)
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
-*/
-
-#ifndef GCOPTER_HPP
-#define GCOPTER_HPP
+#ifndef GCOPTER_FIXED_TIME_HPP
+#define GCOPTER_FIXED_TIME_HPP
 
 #include "minco.hpp"
 #include "flatness.hpp"
@@ -35,12 +11,12 @@
 #include <cfloat>
 #include <iostream>
 #include <vector>
-#include <geo_utils.hpp>
+#include "geo_utils.hpp"
 
-namespace gcopter
+namespace gcopter_fixed
 {
 
-    class GCOPTER_PolytopeSFC
+    class GCOPTER_PolytopeSFC_FixedTime
     {
     public:
         typedef Eigen::Matrix3Xd PolyhedronV;
@@ -52,7 +28,6 @@ namespace gcopter
         minco::MINCO_S3NU minco;
         flatness::FlatnessMap flatmap;
 
-        double rho;
         Eigen::Matrix3d headPVA;
         Eigen::Matrix3d tailPVA;
 
@@ -66,9 +41,7 @@ namespace gcopter
 
         int polyN;
         int pieceN;
-
         int spatialDim;
-        int temporalDim;
 
         double smoothEps;
         int integralRes;
@@ -77,6 +50,7 @@ namespace gcopter
         Eigen::VectorXd physicalPm;
         double safety_margin;
         double zero_cost;
+        bool biasing;
         double allocSpeed;
 
         lbfgs::lbfgs_parameter_t lbfgs_params;
@@ -84,65 +58,9 @@ namespace gcopter
         Eigen::Matrix3Xd points;
         Eigen::VectorXd times;
         Eigen::Matrix3Xd gradByPoints;
-        Eigen::VectorXd gradByTimes;
         Eigen::MatrixX3d partialGradByCoeffs;
-        Eigen::VectorXd partialGradByTimes;
 
     private:
-        static inline void forwardT(const Eigen::VectorXd &tau,
-                                    Eigen::VectorXd &T)
-        {
-            const int sizeTau = tau.size();
-            T.resize(sizeTau);
-            for (int i = 0; i < sizeTau; i++)
-            {
-                T(i) = tau(i) > 0.0
-                           ? ((0.5 * tau(i) + 1.0) * tau(i) + 1.0)
-                           : 1.0 / ((0.5 * tau(i) - 1.0) * tau(i) + 1.0);
-            }
-            return;
-        }
-
-        template <typename EIGENVEC>
-        static inline void backwardT(const Eigen::VectorXd &T,
-                                     EIGENVEC &tau)
-        {
-            const int sizeT = T.size();
-            tau.resize(sizeT);
-            for (int i = 0; i < sizeT; i++)
-            {
-                tau(i) = T(i) > 1.0
-                             ? (sqrt(2.0 * T(i) - 1.0) - 1.0)
-                             : (1.0 - sqrt(2.0 / T(i) - 1.0));
-            }
-
-            return;
-        }
-
-        template <typename EIGENVEC>
-        static inline void backwardGradT(const Eigen::VectorXd &tau,
-                                         const Eigen::VectorXd &gradT,
-                                         EIGENVEC &gradTau)
-        {
-            const int sizeTau = tau.size();
-            gradTau.resize(sizeTau);
-            double denSqrt;
-            for (int i = 0; i < sizeTau; i++)
-            {
-                if (tau(i) > 0)
-                {
-                    gradTau(i) = gradT(i) * (tau(i) + 1.0);
-                }
-                else
-                {
-                    denSqrt = (0.5 * tau(i) - 1.0) * tau(i) + 1.0;
-                    gradTau(i) = gradT(i) * (1.0 - tau(i)) / (denSqrt * denSqrt);
-                }
-            }
-
-            return;
-        }
-
         static inline void forwardP(const Eigen::VectorXd &xi,
                                     const Eigen::VectorXi &vIdx,
                                     const PolyhedraV &vPolys,
@@ -223,7 +141,7 @@ namespace gcopter
                 x.setConstant(sqrt(1.0 / k));
                 lbfgs::lbfgs_optimize(x,
                                       minSqrD,
-                                      &GCOPTER_PolytopeSFC::costTinyNLS,
+                                      &GCOPTER_PolytopeSFC_FixedTime::costTinyNLS,
                                       nullptr,
                                       nullptr,
                                       &ovPoly,
@@ -322,38 +240,6 @@ namespace gcopter
             }
         }
 
-        static inline bool smoothedL1Corridor(const double &x,
-                                      const double &mu,
-                                      const double &b,
-                                      double &f,
-                                      double &df)
-        {
-            // std::cout<<"[GCOPTER DEBUG]: corridor cf called"<<std::endl;
-            if(x < -b)
-            {
-                return false;
-            }
-            else if (x > -b + mu)
-            {
-                f = (x+b) - 0.5 * mu;
-                df = 1.0;
-                return true;
-            }
-            else
-            {
-                const double xdmu = (x+b) / mu;
-                const double sqrxdmu = xdmu * xdmu;
-                const double mumxd2 = mu - 0.5 * (x+b);
-                f = mumxd2 * sqrxdmu * xdmu;
-                df = sqrxdmu * ((-0.5) * xdmu + 3.0 * mumxd2 / mu);
-                return true;
-            }
-        }
-
-        // magnitudeBounds = [v_max, omg_max, theta_max, thrust_min, thrust_max]^T
-        // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
-        // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
-        //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
         static inline void attachPenaltyFunctional(const Eigen::VectorXd &T,
                                                    const Eigen::MatrixX3d &coeffs,
                                                    const Eigen::VectorXi &hIdx,
@@ -366,8 +252,8 @@ namespace gcopter
                                                    const Eigen::VectorXd &penaltyWeights,
                                                    flatness::FlatnessMap &flatMap,
                                                    double &cost,
-                                                   Eigen::VectorXd &gradT,
-                                                   Eigen::MatrixX3d &gradC)
+                                                   Eigen::MatrixX3d &gradC,
+                                                   const bool &safety_bias)
         {
             const double velSqrMax = magnitudeBounds(0) * magnitudeBounds(0);
             const double omgSqrMax = magnitudeBounds(1) * magnitudeBounds(1);
@@ -483,18 +369,11 @@ namespace gcopter
                                      totalGradPsi, totalGradPsiD);
 
                     node = (j == 0 || j == integralResolution) ? 0.5 : 1.0;
-                    alpha = j * integralFrac;
                     gradC.block<6, 3>(i * 6, 0) += (beta0 * totalGradPos.transpose() +
                                                     beta1 * totalGradVel.transpose() +
                                                     beta2 * totalGradAcc.transpose() +
                                                     beta3 * totalGradJer.transpose()) *
                                                    node * step;
-                    gradT(i) += (totalGradPos.dot(vel) +
-                                 totalGradVel.dot(acc) +
-                                 totalGradAcc.dot(jer) +
-                                 totalGradJer.dot(sna)) *
-                                    alpha * node * step +
-                                node * integralFrac * pena;
                     cost += node * step * pena;
                 }
             }
@@ -503,41 +382,31 @@ namespace gcopter
         }
 
         static inline double costFunctional(void *ptr,
-                                            const Eigen::VectorXd &x,
-                                            Eigen::VectorXd &g)
+                                            const Eigen::VectorXd &xi,
+                                            Eigen::VectorXd &gradXi)
         {
-            GCOPTER_PolytopeSFC &obj = *(GCOPTER_PolytopeSFC *)ptr;
-            const int dimTau = obj.temporalDim;
-            const int dimXi = obj.spatialDim;
-            const double weightT = obj.rho;
-            Eigen::Map<const Eigen::VectorXd> tau(x.data(), dimTau);
-            Eigen::Map<const Eigen::VectorXd> xi(x.data() + dimTau, dimXi);
-            Eigen::Map<Eigen::VectorXd> gradTau(g.data(), dimTau);
-            Eigen::Map<Eigen::VectorXd> gradXi(g.data() + dimTau, dimXi);
-
-            forwardT(tau, obj.times);
+            GCOPTER_PolytopeSFC_FixedTime &obj = *(GCOPTER_PolytopeSFC_FixedTime *)ptr;
+            
             forwardP(xi, obj.vPolyIdx, obj.vPolytopes, obj.points);
 
             double cost;
             obj.minco.setParameters(obj.points, obj.times);
             obj.minco.getEnergy(cost);
             obj.minco.getEnergyPartialGradByCoeffs(obj.partialGradByCoeffs);
-            obj.minco.getEnergyPartialGradByTimes(obj.partialGradByTimes);
 
+            // Create dummy gradT (not used)
+            Eigen::VectorXd dummyGradT = Eigen::VectorXd::Zero(obj.times.size());
+            
             attachPenaltyFunctional(obj.times, obj.minco.getCoeffs(),
                                     obj.hPolyIdx, obj.hPolytopes,
                                     obj.smoothEps, obj.safety_margin, 
                                     obj.zero_cost, obj.integralRes,
                                     obj.magnitudeBd, obj.penaltyWt, obj.flatmap,
-                                    cost, obj.partialGradByTimes, obj.partialGradByCoeffs);
+                                    cost, obj.partialGradByCoeffs, obj.biasing);
 
-            obj.minco.propogateGrad(obj.partialGradByCoeffs, obj.partialGradByTimes,
-                                    obj.gradByPoints, obj.gradByTimes);
+            obj.minco.propogateGrad(obj.partialGradByCoeffs, dummyGradT,
+                                    obj.gradByPoints, dummyGradT);
 
-            cost += weightT * obj.times.sum();
-            obj.gradByTimes.array() += weightT;
-
-            backwardGradT(tau, obj.gradByTimes, gradTau);
             backwardGradP(xi, obj.vPolyIdx, obj.vPolytopes, obj.gradByPoints, gradXi);
             normRetrictionLayer(xi, obj.vPolyIdx, obj.vPolytopes, cost, gradXi);
 
@@ -554,7 +423,6 @@ namespace gcopter
             const Eigen::Vector3d &fin = *((const Eigen::Vector3d *)(dataPtrs[2]));
             const PolyhedraV &vPolys = *((PolyhedraV *)(dataPtrs[3]));
             double cost = 0.0;
-            float lambda_rrt = 1.0;
             const int overlaps = vPolys.size() / 2;
 
             Eigen::Matrix3Xd gradP = Eigen::Matrix3Xd::Zero(3, overlaps);
@@ -633,15 +501,13 @@ namespace gcopter
                 vSizes(i) = vPolys[2 * i + 1].cols();
             }
             Eigen::VectorXd xi(vSizes.sum());
-            // std::cout<<"[shortest path debug] xi size: "<<xi.size()<<std::endl;
-            // std::cout<<"[shortest path debug] number of overlaps: "<<overlaps<<std::endl;
             for (int i = 0, j = 0; i < overlaps; i++)
             {
                 xi.segment(j, vSizes(i)).setConstant(sqrt(1.0 / vSizes(i)));
                 j += vSizes(i);
             }
             double minDistance;
-            void *dataPtrs[6];
+            void *dataPtrs[4];
             dataPtrs[0] = (void *)(&smoothD);
             dataPtrs[1] = (void *)(&ini);
             dataPtrs[2] = (void *)(&fin);
@@ -653,7 +519,7 @@ namespace gcopter
 
             lbfgs::lbfgs_optimize(xi,
                                   minDistance,
-                                  &GCOPTER_PolytopeSFC::costDistance,
+                                  &GCOPTER_PolytopeSFC_FixedTime::costDistance,
                                   nullptr,
                                   nullptr,
                                   dataPtrs,
@@ -760,8 +626,7 @@ namespace gcopter
         // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
         // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
         //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
-        inline bool setup(const double &timeWeight,
-                          const Eigen::Matrix3d &initialPVA,
+        inline bool setup(const Eigen::Matrix3d &initialPVA,
                           const Eigen::Matrix3d &terminalPVA,
                           const PolyhedraH &safeCorridor,
                           const double &lengthPerPiece,
@@ -769,9 +634,9 @@ namespace gcopter
                           const int &integralResolution,
                           const Eigen::VectorXd &magnitudeBounds,
                           const Eigen::VectorXd &penaltyWeights,
-                          const Eigen::VectorXd &physicalParams)
+                          const Eigen::VectorXd &physicalParams,
+                          const Eigen::VectorXd &TimePerPiece)
         {
-            rho = timeWeight;
             headPVA = initialPVA;
             tailPVA = terminalPVA;
 
@@ -784,6 +649,7 @@ namespace gcopter
             }
             if (!processCorridor(hPolytopes, vPolytopes))
             {
+                std::cout<<"process corridor returned false: "<<std::endl;
                 return false;
             }
 
@@ -796,17 +662,18 @@ namespace gcopter
             allocSpeed = magnitudeBd(0) * 3.0;
             getShortestPath(headPVA.col(0), tailPVA.col(0), vPolytopes, smoothEps, shortPath);
             const Eigen::Matrix3Xd deltas = shortPath.rightCols(polyN) - shortPath.leftCols(polyN);
+            std::cout<<"deltas: "<<deltas.transpose()<<std::endl;
             pieceIdx = (deltas.colwise().norm() / lengthPerPiece).cast<int>().transpose();
             pieceIdx.array() += 1;
             pieceN = pieceIdx.sum();
-
-            temporalDim = pieceN;
+            std::cout<<"pieceN before spatial dim update: "<<pieceN<<std::endl;
             spatialDim = 0;
             vPolyIdx.resize(pieceN - 1);
             hPolyIdx.resize(pieceN);
             for (int i = 0, j = 0, k; i < polyN; i++)
             {
                 k = pieceIdx(i);
+                std::cout<<"spatial dimension testing: "<<k<<std::endl;
                 for (int l = 0; l < k; l++, j++)
                 {
                     if (l < k - 1)
@@ -823,71 +690,77 @@ namespace gcopter
                 }
             }
 
-            // Setup for MINCO_S3NU, FlatnessMap, and L-BFGS solver
+            // Setup for MINCO_S3NU and FlatnessMap
             minco.setConditions(headPVA, tailPVA, pieceN);
             flatmap.reset(physicalPm(0), physicalPm(1), physicalPm(2),
                           physicalPm(3), physicalPm(4), physicalPm(5));
 
             // Allocate temp variables
             points.resize(3, pieceN - 1);
-            times.resize(pieceN);
+            times = TimePerPiece;
             gradByPoints.resize(3, pieceN - 1);
-            gradByTimes.resize(pieceN);
+            if(times.size() != pieceN)
+            {
+                std::cout<<"FUBAR potential ############# "<<std::endl;
+            }
             partialGradByCoeffs.resize(6 * pieceN, 3);
-            partialGradByTimes.resize(pieceN);
-
+            std::cout << "polyN: " << polyN << std::endl;
+            std::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
+            std::cout << "pieceN: " << pieceN << std::endl;
+            std::cout << "spatialDim: " << spatialDim << std::endl;
+            std::cout << "times size: " << times.size() << std::endl;
             return true;
         }
 
         inline double optimize(Trajectory<5> &traj,
                                const double &relCostTol)
         {
-            std::cout<<"c1"<<std::endl;
-            Eigen::VectorXd x(temporalDim + spatialDim);
-            std::cout<<"c2"<<std::endl;
-            Eigen::Map<Eigen::VectorXd> tau(x.data(), temporalDim);
-            std::cout<<"c3"<<std::endl;
-            Eigen::Map<Eigen::VectorXd> xi(x.data() + temporalDim, spatialDim);
-            std::cout<<"c4"<<std::endl;
-            setInitial(shortPath, allocSpeed, pieceIdx, points, times);
-            backwardT(times, tau);
+            if (spatialDim == 0) {
+                std::cout<<"points in 1 poly case: "<<points.transpose()<<std::endl;
+                minco.setParameters(points, times);
+                minco.getTrajectory(traj);
+
+                Eigen::VectorXd emptyXi(0);
+                Eigen::VectorXd gradXi;
+                double cost = costFunctional(this, emptyXi, gradXi);
+                return cost;
+            }
+
+            Eigen::VectorXd xi(spatialDim);
             backwardP(points, vPolyIdx, vPolytopes, xi);
-            std::cout<<"c5"<<std::endl;
+
             double minCostFunctional;
             lbfgs_params.mem_size = 16;
             lbfgs_params.past = 3;
             lbfgs_params.min_step = 1.0e-32;
             lbfgs_params.g_epsilon = 0.0;
             lbfgs_params.delta = relCostTol;
-            std::cout<<"c6"<<std::endl;
-            int ret = lbfgs::lbfgs_optimize(x,
+
+            int ret = lbfgs::lbfgs_optimize(xi,
                                             minCostFunctional,
-                                            &GCOPTER_PolytopeSFC::costFunctional,
+                                            &GCOPTER_PolytopeSFC_FixedTime::costFunctional,
                                             nullptr,
                                             nullptr,
                                             this,
                                             lbfgs_params);
-            std::cout<<"c7"<<std::endl;
             if (ret >= 0)
             {
-                std::cout<<"c8"<<std::endl;
-                forwardT(tau, times);
                 forwardP(xi, vPolyIdx, vPolytopes, points);
                 minco.setParameters(points, times);
                 minco.getTrajectory(traj);
             }
             else
             {
-                std::cout<<"c9"<<std::endl;
                 traj.clear();
                 minCostFunctional = INFINITY;
                 std::cout << "Optimization Failed: "
                           << lbfgs::lbfgs_strerror(ret)
                           << std::endl;
             }
-            std::cout<<"c10"<<std::endl;
+
             return minCostFunctional;
         }
+
         Eigen::Matrix3Xd getShortPath()
         {
             return shortPath;
