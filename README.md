@@ -1,0 +1,1 @@
+This repo provides a C++ implementation of ST-RRT* algorithm along with an integration with pcl visualizer to visualize the evolution of obstacles and planned path. This is a standalone code and can be integrated into any planning pipeline
